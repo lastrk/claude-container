@@ -1,6 +1,36 @@
-# Secure DevContainer Configuration for cudf-metal
+# Secure DevContainer Configuration for Claude Code
 
-This directory contains a secure, Podman-compatible DevContainer configuration for the cudf-metal project. The configuration follows Microsoft's recommended best practices and implements defense-in-depth security principles.
+This repository contains a secure, Podman-compatible DevContainer configuration with Claude Code integration. The configuration follows Microsoft's recommended best practices and implements defense-in-depth security principles.
+
+## Quick Install
+
+To add this DevContainer configuration to any Git repository, run:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/lastrk/claude-container/main/install.sh | bash
+```
+
+Or for more control (recommended):
+
+```bash
+# Download the installer
+curl -fsSL https://raw.githubusercontent.com/lastrk/claude-container/main/install.sh -o install.sh
+
+# Review it
+cat install.sh
+
+# Run it
+bash install.sh
+```
+
+The installer is self-contained and includes all configuration files embedded within it.
+
+The installer will:
+- Check if you're in a Git repository
+- Create `.devcontainer/` directory (errors if it exists)
+- Download all configuration files
+- Add authentication files to `.gitignore`
+- Display next steps for opening in VSCode
 
 ## Security Model
 
