@@ -100,10 +100,22 @@ The installer will:
 
 3. **Podman Machine** (macOS only)
    ```bash
-   # Initialize and start Podman machine
+   # Initialize Podman machine with adequate resources
    podman machine init
+
+   # IMPORTANT: Configure VM resources BEFORE first use
+   # The container needs at least 8GB RAM and 8 CPUs
+   # Allocate more than container needs (VM overhead)
+   podman machine stop
+   podman machine set --cpus 10 --memory 16384  # 10 CPUs, 16GB RAM
    podman machine start
+
+   # Verify configuration
+   podman machine list
+   # Should show: CPUS: 10, MEMORY: 16GiB
    ```
+
+   **Why this is required:** On macOS, Podman runs in a VM. The VM must have MORE resources than the container needs. If the container is configured for 8 CPUs/8GB RAM, the VM needs ~10 CPUs/16GB RAM to have headroom.
 
 ### Configure VSCode to Use Podman
 
@@ -360,6 +372,38 @@ npm config set prefix ~/.npm-global
 export PATH=~/.npm-global/bin:$PATH
 ```
 
+### Container Has Limited Resources (macOS)
+
+**Problem**: Container shows only 4 CPUs, 2GB RAM despite devcontainer.json configuration
+
+**Cause**: On macOS, Podman runs in a VM. The VM itself has resource limits that override container limits.
+
+**Solution**:
+```bash
+# 1. Stop the Podman machine
+podman machine stop
+
+# 2. Check current VM resources
+podman machine list
+
+# 3. Set adequate resources (more than container needs)
+podman machine set --cpus 10 --memory 16384
+
+# 4. Start machine
+podman machine start
+
+# 5. Verify
+podman machine list
+# Should show: CPUS: 10, MEMORY: 16GiB
+
+# 6. Rebuild DevContainer in VSCode
+# F1 → "Dev Containers: Rebuild Container"
+```
+
+**Rule of thumb**: Podman VM needs ~20-25% more resources than container configuration
+- Container wants 8 CPUs → VM needs 10 CPUs
+- Container wants 8GB RAM → VM needs 16GB RAM
+
 ### Cannot Access Host Services
 
 **Problem**: Cannot connect to database/service running on host
@@ -438,28 +482,57 @@ RUN apt-get update && apt-get install -y \
 
 ### Adjusting Resource Limits
 
-The container has default resource limits to prevent consuming all host resources:
-- **CPU**: 4 CPUs (default)
-- **Memory**: 8GB RAM (default)
+The container has default resource limits configured for generous development workloads:
+- **CPU**: 8 CPUs (~80% of 10-core system)
+- **Memory**: 8GB RAM minimum
+- **Swap**: 48GB maximum (not preallocated, uses disk only when RAM full)
+- **Total Virtual Memory**: 56GB (8GB RAM + 48GB swap)
+
+**These defaults assume:**
+- Host with 10+ CPU cores (adjust proportionally for your system)
+- Host with 16GB+ RAM
+- Available disk space for swap (only used when needed)
 
 To adjust these limits, edit `devcontainer.json`:
 
 ```jsonc
 "runArgs": [
   // ... other args ...
-  "--cpus=2",      // Reduce to 2 CPUs
-  "--memory=4g"    // Reduce to 4GB RAM
+  "--cpus=12",         // For 16-core system (80% = 12-13 cores)
+  "--memory=16g",      // Double RAM for large projects
+  "--memory-swap=64g"  // 16GB RAM + 48GB swap
 ]
 ```
 
+**Quick calculation guide:**
+```bash
+# Find your host CPU cores
+sysctl -n hw.ncpu  # macOS
+nproc              # Linux
+# Multiply by 0.8 for container allocation
+
+# Find your host RAM
+sysctl hw.memsize | awk '{print $2/1024/1024/1024 " GB"}'  # macOS
+free -h            # Linux
+# Allocate at least 8GB, more for heavy builds
+```
+
+**Swap configuration options:**
+- `--memory-swap=8g` (same as memory): Disables swap entirely, RAM only
+- `--memory-swap=16g` (2x memory): Moderate 8GB swap buffer
+- `--memory-swap=56g` (default): Large 48GB swap for intensive builds
+- `--memory-swap=-1`: Unlimited swap (not recommended, can hang system)
+
 **Common configurations:**
 
-| Use Case | CPUs | Memory | Notes |
-|----------|------|--------|-------|
-| Light development | 2 | 4g | Minimal resource usage |
-| Standard development | 4 | 8g | Default, balanced |
-| Heavy builds/testing | 8 | 16g | Resource-intensive tasks |
-| Constrained host | 1 | 2g | Low-powered machines (may be slow) |
+| Use Case | CPUs | Memory | Swap Total | Swap Space | Notes |
+|----------|------|--------|------------|------------|-------|
+| Constrained host (4 cores, 8GB RAM) | 3 | 4g | 4g | 0GB | No swap, minimal but functional |
+| Small host (8 cores, 16GB RAM) | 6 | 8g | 16g | 8GB | Moderate swap buffer |
+| Standard (10 cores, 32GB RAM) | 8 | 8g | 56g | 48GB | Default, large swap for builds |
+| Performance (12 cores, 32GB RAM) | 10 | 16g | 16g | 0GB | No swap, all RAM, fastest |
+| Heavy builds (16 cores, 64GB RAM) | 12 | 32g | 80g | 48GB | Large RAM + large swap |
+| Extreme (32 cores, 128GB RAM) | 25 | 64g | 112g | 48GB | Maximum resources |
 
 **Finding your host's resources:**
 ```bash

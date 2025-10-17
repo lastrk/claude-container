@@ -75,7 +75,7 @@ Defense-in-depth container hardening via `runArgs` in devcontainer.json:
 2. **Network Isolation**: slirp4netns (user-mode, blocks host services)
 3. **Privilege Escalation**: `--security-opt=no-new-privileges`
 4. **User Namespace**: `--userns=keep-id` (Podman rootless UID mapping)
-5. **Resource Limits**: `--cpus=4` and `--memory=8g` (configurable)
+5. **Resource Limits**: `--cpus=8`, `--memory=8g`, `--memory-swap=56g` (48GB swap, configurable)
 
 ### File Ownership Model
 
@@ -172,10 +172,36 @@ Edit `devcontainer.json` runArgs array:
 ```jsonc
 "runArgs": [
   // ... other flags ...
-  "--cpus=2",      // Default: 4
-  "--memory=4g"    // Default: 8g
+  "--cpus=12",         // Default: 8 (80% of 10-core host)
+  "--memory=16g",      // Default: 8g minimum
+  "--memory-swap=64g"  // Default: 56g (8g RAM + 48g swap)
 ]
 ```
+
+**Default configuration:**
+- CPU: 8 cores (~80% of 10-core system)
+- RAM: 8GB minimum
+- Swap: 48GB maximum (not preallocated)
+- Total VM: 56GB
+
+**Calculate for your host:**
+```bash
+# CPU: Use 80% of host cores
+# macOS: sysctl -n hw.ncpu
+# Linux: nproc
+# Example: 16 cores × 0.8 = 12-13 cores
+
+# RAM: At least 8GB, more for heavy builds
+# Example: 32GB host → use 16GB or 24GB for container
+
+# Swap: Keep 48GB or scale proportionally
+# Example: 16GB RAM + 48GB swap = 64GB total
+```
+
+**Swap behavior:**
+- `--memory-swap` = `--memory`: No swap (RAM only)
+- `--memory-swap` > `--memory`: Enables swap (difference is swap size)
+- Swap is not preallocated: Only uses disk when RAM is full
 
 Then rebuild: `./build.sh`
 
@@ -267,6 +293,40 @@ code .
 **Cause**: build.sh expects all files in `FILES` array to exist
 
 **Solution**: Ensure all files listed in build.sh:31-36 are present in project root
+
+### Container resources don't match configuration (macOS)
+
+**Symptom**: Container shows 4 CPUs, 2GB RAM despite devcontainer.json specifying 8 CPUs, 8GB RAM
+
+**Cause**: Podman runs in a VM on macOS. The VM's resource limits override container limits.
+
+**Solution**:
+```bash
+# Check current VM resources
+podman machine list
+
+# If VM has insufficient resources:
+podman machine stop
+podman machine set --cpus 10 --memory 16384  # 10 CPUs, 16GB RAM
+podman machine start
+
+# Verify
+podman machine list  # Should show updated resources
+
+# Rebuild container in VSCode
+# F1 → "Dev Containers: Rebuild Container"
+```
+
+**Critical**: The Podman VM must have MORE resources than the container needs:
+- Container: 8 CPUs → VM: 10+ CPUs (20-25% overhead)
+- Container: 8GB RAM → VM: 16GB RAM (room for VM overhead)
+
+**Check container resources**:
+```bash
+# Inside container
+nproc  # Should show 8 (if VM has 10+)
+free -h  # Should show ~8GB (if VM has 16GB)
+```
 
 ### Installer creates malformed files
 

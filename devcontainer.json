@@ -158,21 +158,50 @@
 		// CPU Limit: Restrict CPU usage
 		// Purpose: Prevents container from consuming all host CPU resources
 		// Format: Number of CPUs (can be fractional, e.g., 0.5 = 50% of one CPU)
-		// Default: 4 CPUs - good balance for development workloads
-		// Why limit: Prevents runaway processes from impacting host system
-		// Override: Change this value based on your needs and host capabilities
+		// Default: 8 CPUs - approximately 80% of a 10-core system
+		// Recommended: Allocate 80% of your host CPU cores to the container
+		// How to calculate:
+		//   macOS: sysctl -n hw.ncpu (e.g., 10 cores → use 8)
+		//   Linux: nproc (e.g., 16 cores → use 12-13)
+		// Why limit: Reserves 20% of CPU for host OS and other applications
+		// Override: Adjust based on your host (e.g., "--cpus=12" for 16-core system)
 		// Docker/Podman: Both support --cpus flag
-		"--cpus=4",
+		"--cpus=8",
 
 		// Memory Limit: Restrict RAM usage
 		// Purpose: Prevents container from consuming all host memory
 		// Format: Number with unit (m=MB, g=GB), e.g., "8g" = 8 gigabytes
-		// Default: 8GB - sufficient for most development tasks with Claude Code
-		// Why limit: Prevents OOM situations from affecting host stability
-		// Override: Increase for memory-intensive tasks, decrease for resource-constrained hosts
-		// Minimum recommended: 4GB for Claude Code + basic development
+		// Default: 8GB - minimum for Claude Code with complex projects
+		// Recommended: At least 8GB, increase for memory-intensive workloads
+		// How to calculate:
+		//   macOS: sysctl hw.memsize (bytes, divide by 1GB)
+		//   Linux: free -h (human readable)
+		// Why 8GB minimum: Claude Code needs ~2-3GB, leaving 5-6GB for build tools
+		// Override examples:
+		//   - Light projects: "--memory=4g" (minimal, may see slowdowns)
+		//   - Standard: "--memory=8g" (recommended default)
+		//   - Heavy builds: "--memory=16g" or "--memory=32g"
 		// Docker/Podman: Both support --memory flag
-		"--memory=8g"
+		"--memory=8g",
+
+		// Memory + Swap Limit: Control total virtual memory (RAM + swap)
+		// Purpose: Limits total memory including swap space
+		// Format: Total memory (RAM + swap). Set equal to --memory to disable swap
+		// Default: 56g = 8GB RAM + 48GB swap (large buffer for memory-intensive tasks)
+		// Why 48GB swap: Allows large compilations/builds without OOM kills
+		// Swap is not preallocated: Only uses disk space when RAM is full
+		// Behavior:
+		//   - Same as --memory (8g): No swap, RAM only, fastest but may OOM
+		//   - Greater than --memory (56g): Allows swap usage (56g - 8g = 48GB max swap)
+		//   - Unlimited (-1): Allows unlimited swap (not recommended, can hang system)
+		// Trade-off: Swap prevents OOM kills but slower than RAM (uses disk I/O)
+		// Override examples:
+		//   - No swap: "--memory-swap=8g" (same as memory, predictable performance)
+		//   - Moderate swap: "--memory-swap=16g" (8GB + 8GB swap)
+		//   - Large swap: "--memory-swap=56g" (8GB + 48GB swap, default)
+		//   - With more RAM: If using "--memory=16g", use "--memory-swap=64g" for 48GB swap
+		// Docker/Podman: Both support --memory-swap flag
+		"--memory-swap=56g"
 	],
 
 	// Features: Pre-packaged DevContainer functionality modules

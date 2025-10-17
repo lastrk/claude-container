@@ -3,8 +3,8 @@ set -e
 
 # Secure DevContainer Configuration Installer
 # Self-contained installer with all configuration files embedded
-# Generated from commit: f52c04a
-# Build date: 2025-10-13 16:56:35
+# Generated from commit: 87ca6bc
+# Build date: 2025-10-17 09:30:52
 
 
 # Colors for output
@@ -266,21 +266,50 @@ cat > "${DEVCONTAINER_DIR}/devcontainer.json" << 'EOF_devcontainer_json'
 		// CPU Limit: Restrict CPU usage
 		// Purpose: Prevents container from consuming all host CPU resources
 		// Format: Number of CPUs (can be fractional, e.g., 0.5 = 50% of one CPU)
-		// Default: 4 CPUs - good balance for development workloads
-		// Why limit: Prevents runaway processes from impacting host system
-		// Override: Change this value based on your needs and host capabilities
+		// Default: 8 CPUs - approximately 80% of a 10-core system
+		// Recommended: Allocate 80% of your host CPU cores to the container
+		// How to calculate:
+		//   macOS: sysctl -n hw.ncpu (e.g., 10 cores → use 8)
+		//   Linux: nproc (e.g., 16 cores → use 12-13)
+		// Why limit: Reserves 20% of CPU for host OS and other applications
+		// Override: Adjust based on your host (e.g., "--cpus=12" for 16-core system)
 		// Docker/Podman: Both support --cpus flag
-		"--cpus=4",
+		"--cpus=8",
 
 		// Memory Limit: Restrict RAM usage
 		// Purpose: Prevents container from consuming all host memory
 		// Format: Number with unit (m=MB, g=GB), e.g., "8g" = 8 gigabytes
-		// Default: 8GB - sufficient for most development tasks with Claude Code
-		// Why limit: Prevents OOM situations from affecting host stability
-		// Override: Increase for memory-intensive tasks, decrease for resource-constrained hosts
-		// Minimum recommended: 4GB for Claude Code + basic development
+		// Default: 8GB - minimum for Claude Code with complex projects
+		// Recommended: At least 8GB, increase for memory-intensive workloads
+		// How to calculate:
+		//   macOS: sysctl hw.memsize (bytes, divide by 1GB)
+		//   Linux: free -h (human readable)
+		// Why 8GB minimum: Claude Code needs ~2-3GB, leaving 5-6GB for build tools
+		// Override examples:
+		//   - Light projects: "--memory=4g" (minimal, may see slowdowns)
+		//   - Standard: "--memory=8g" (recommended default)
+		//   - Heavy builds: "--memory=16g" or "--memory=32g"
 		// Docker/Podman: Both support --memory flag
-		"--memory=8g"
+		"--memory=8g",
+
+		// Memory + Swap Limit: Control total virtual memory (RAM + swap)
+		// Purpose: Limits total memory including swap space
+		// Format: Total memory (RAM + swap). Set equal to --memory to disable swap
+		// Default: 56g = 8GB RAM + 48GB swap (large buffer for memory-intensive tasks)
+		// Why 48GB swap: Allows large compilations/builds without OOM kills
+		// Swap is not preallocated: Only uses disk space when RAM is full
+		// Behavior:
+		//   - Same as --memory (8g): No swap, RAM only, fastest but may OOM
+		//   - Greater than --memory (56g): Allows swap usage (56g - 8g = 48GB max swap)
+		//   - Unlimited (-1): Allows unlimited swap (not recommended, can hang system)
+		// Trade-off: Swap prevents OOM kills but slower than RAM (uses disk I/O)
+		// Override examples:
+		//   - No swap: "--memory-swap=8g" (same as memory, predictable performance)
+		//   - Moderate swap: "--memory-swap=16g" (8GB + 8GB swap)
+		//   - Large swap: "--memory-swap=56g" (8GB + 48GB swap, default)
+		//   - With more RAM: If using "--memory=16g", use "--memory-swap=64g" for 48GB swap
+		// Docker/Podman: Both support --memory-swap flag
+		"--memory-swap=56g"
 	],
 
 	// Features: Pre-packaged DevContainer functionality modules
@@ -724,7 +753,7 @@ Defense-in-depth container hardening via `runArgs` in devcontainer.json:
 2. **Network Isolation**: slirp4netns (user-mode, blocks host services)
 3. **Privilege Escalation**: `--security-opt=no-new-privileges`
 4. **User Namespace**: `--userns=keep-id` (Podman rootless UID mapping)
-5. **Resource Limits**: `--cpus=4` and `--memory=8g` (configurable)
+5. **Resource Limits**: `--cpus=8`, `--memory=8g`, `--memory-swap=56g` (48GB swap, configurable)
 
 ### File Ownership Model
 
@@ -821,10 +850,36 @@ Edit `devcontainer.json` runArgs array:
 ```jsonc
 "runArgs": [
   // ... other flags ...
-  "--cpus=2",      // Default: 4
-  "--memory=4g"    // Default: 8g
+  "--cpus=12",         // Default: 8 (80% of 10-core host)
+  "--memory=16g",      // Default: 8g minimum
+  "--memory-swap=64g"  // Default: 56g (8g RAM + 48g swap)
 ]
 ```
+
+**Default configuration:**
+- CPU: 8 cores (~80% of 10-core system)
+- RAM: 8GB minimum
+- Swap: 48GB maximum (not preallocated)
+- Total VM: 56GB
+
+**Calculate for your host:**
+```bash
+# CPU: Use 80% of host cores
+# macOS: sysctl -n hw.ncpu
+# Linux: nproc
+# Example: 16 cores × 0.8 = 12-13 cores
+
+# RAM: At least 8GB, more for heavy builds
+# Example: 32GB host → use 16GB or 24GB for container
+
+# Swap: Keep 48GB or scale proportionally
+# Example: 16GB RAM + 48GB swap = 64GB total
+```
+
+**Swap behavior:**
+- `--memory-swap` = `--memory`: No swap (RAM only)
+- `--memory-swap` > `--memory`: Enables swap (difference is swap size)
+- Swap is not preallocated: Only uses disk when RAM is full
 
 Then rebuild: `./build.sh`
 
@@ -916,6 +971,40 @@ code .
 **Cause**: build.sh expects all files in `FILES` array to exist
 
 **Solution**: Ensure all files listed in build.sh:31-36 are present in project root
+
+### Container resources don't match configuration (macOS)
+
+**Symptom**: Container shows 4 CPUs, 2GB RAM despite devcontainer.json specifying 8 CPUs, 8GB RAM
+
+**Cause**: Podman runs in a VM on macOS. The VM's resource limits override container limits.
+
+**Solution**:
+```bash
+# Check current VM resources
+podman machine list
+
+# If VM has insufficient resources:
+podman machine stop
+podman machine set --cpus 10 --memory 16384  # 10 CPUs, 16GB RAM
+podman machine start
+
+# Verify
+podman machine list  # Should show updated resources
+
+# Rebuild container in VSCode
+# F1 → "Dev Containers: Rebuild Container"
+```
+
+**Critical**: The Podman VM must have MORE resources than the container needs:
+- Container: 8 CPUs → VM: 10+ CPUs (20-25% overhead)
+- Container: 8GB RAM → VM: 16GB RAM (room for VM overhead)
+
+**Check container resources**:
+```bash
+# Inside container
+nproc  # Should show 8 (if VM has 10+)
+free -h  # Should show ~8GB (if VM has 16GB)
+```
 
 ### Installer creates malformed files
 
