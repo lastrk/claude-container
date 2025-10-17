@@ -52,8 +52,13 @@ The installer will:
 
 2. **Minimal Capabilities**
    - Drops all Linux capabilities by default
-   - Only grants essential capabilities (SETUID, SETGID, AUDIT_WRITE)
-   - Reduces attack surface significantly
+   - Only grants essential capabilities for development:
+     - SETUID/SETGID (sudo, user switching)
+     - AUDIT_WRITE (authentication logging)
+     - CHOWN (package manager ownership changes)
+     - NET_BIND_SERVICE (bind to ports 80/443 for web servers)
+     - NET_RAW (ping/traceroute for network debugging)
+   - Reduces attack surface while maintaining developer productivity
 
 3. **Network Isolation**
    - Uses `slirp4netns` for user-mode networking
@@ -122,7 +127,7 @@ export DOCKER_HOST="unix:///run/user/$(id -u)/podman/podman.sock"
 
 1. **Open project in VSCode**
    ```bash
-   code /path/to/cudf-metal
+   code /path/to/your-project
    ```
 
 2. **Reopen in Container**
@@ -138,12 +143,15 @@ export DOCKER_HOST="unix:///run/user/$(id -u)/podman/podman.sock"
 
    # Verify git works
    git status
-
-   # Build project
-   mkdir build && cd build
-   cmake .. -DBUILD_TESTS=ON
-   make -j4
    ```
+
+4. **Run Claude Code in unsupervised mode** (inside container)
+   ```bash
+   # For fully autonomous operation without permission prompts
+   claude --dangerously-skip-permissions
+   ```
+
+   **Important**: This flag bypasses all permission prompts and grants unrestricted access. Only use in sandboxed environments like this container. The container security (dropped capabilities, network isolation, resource limits) provides the safety boundary.
 
 ### Authentication
 
@@ -151,20 +159,16 @@ Claude Code authentication is handled automatically:
 
 1. **On container start**: `initializeCommand` extracts your API/OAuth token from macOS keychain
 2. **Token file**: Token is written to `.devcontainer/.claude-token` (gitignored)
-3. **Template injection**: `postCreateCommand` uses `claude.json.template` and injects the API key
-4. **Configuration created**: API key is injected into `~/.claude.json` from the template
+3. **OAuth extraction**: `initializeCommand` also extracts OAuth account info from `~/.claude.json`
+4. **Configuration generation**: `postCreateCommand` runs `generate-claude-config.sh` which:
+   - Creates `~/.claude/settings.json` with `ANTHROPIC_API_KEY` environment variable
+   - Generates `~/.claude.json` dynamically with OAuth account info and API key
 5. **No manual login needed**: Claude Code works immediately without authentication prompts
 
 **How it works**:
-1. The template file `.devcontainer/claude.json.template` contains a placeholder:
-   ```json
-   {
-     "apiKey": "{{API_KEY_PLACEHOLDER}}",
-     ...
-   }
-   ```
-2. During container creation, the placeholder is replaced with your actual API key
-3. The resulting `~/.claude.json` file contains your credentials securely
+1. The `generate-claude-config.sh` script uses `jq` to build the configuration JSON dynamically
+2. It merges OAuth account data with the API key token
+3. The resulting `~/.claude.json` and `~/.claude/settings.json` files contain your credentials securely
 
 **Security notes**:
 - Token is extracted from keychain on-demand, not stored in git
@@ -175,19 +179,15 @@ Claude Code authentication is handled automatically:
 
 **If authentication fails**: You can manually authenticate inside the container:
 ```bash
-# Verify token file exists
-cat /workspace/.devcontainer/.claude-token
+# Verify token files exist
+ls -la /workspace/.devcontainer/.claude-*
 
 # Verify .claude.json was created and contains API key
 cat ~/.claude.json
+cat ~/.claude/settings.json
 
-# Check the template file
-cat /workspace/.devcontainer/claude.json.template
-
-# Manually recreate .claude.json if needed
-TOKEN=$(cat /workspace/.devcontainer/.claude-token) && \
-  sed "s|{{API_KEY_PLACEHOLDER}}|$TOKEN|g" /workspace/.devcontainer/claude.json.template > ~/.claude.json && \
-  chmod 600 ~/.claude.json
+# Manually regenerate configuration if needed
+/workspace/.devcontainer/generate-claude-config.sh
 
 # Or authenticate interactively
 claude /login
@@ -207,6 +207,37 @@ pip3 install <package-name>
 
 # Or using npm
 npm install -g <package-name>
+```
+
+### Running Web Services
+
+The container can bind to privileged ports (80, 443) for development:
+
+```bash
+# Run HTTP server on port 80 (standard HTTP port)
+python3 -m http.server 80
+
+# Or install and run nginx on port 80
+sudo apt-get install nginx
+sudo nginx
+
+# Node.js server on port 443
+node server.js  # Can bind to 443 without root
+```
+
+### Network Debugging
+
+Network diagnostic tools are available:
+
+```bash
+# Test connectivity
+ping google.com
+
+# Trace route to destination
+traceroute example.com
+
+# Install additional tools
+sudo apt-get install curl wget netcat-openbsd
 ```
 
 ### Committing from Inside Container
@@ -243,9 +274,9 @@ mcr.microsoft.com/devcontainers/base:ubuntu-22.04
 | Tool | Purpose | Installed Via |
 |------|---------|---------------|
 | git | Version control | Base image |
-| build-essential | C++ compilation | apt |
+| build-essential | Compilation tools | apt |
 | cmake, ninja | Build system | apt |
-| python3, pip | Project tooling | apt |
+| python3, pip | Python tooling | apt |
 | node.js, npm | Claude Code, npx | NodeSource |
 
 ### Mount Points
@@ -301,10 +332,10 @@ podman machine start
 **Solution**:
 ```bash
 # On host, check ownership
-ls -la /path/to/cudf-metal
+ls -la /path/to/your-project
 
 # Fix if needed (macOS/Linux)
-chown -R $(whoami) /path/to/cudf-metal
+chown -R $(whoami) /path/to/your-project
 ```
 
 ### Git "Dubious Ownership" Error
@@ -359,6 +390,27 @@ export PATH=~/.npm-global/bin:$PATH
   podman machine start
   ```
 
+### Container Performance Issues
+
+**Problem**: Container is slow or unresponsive
+
+**Possible causes and solutions:**
+
+1. **Insufficient resources allocated**
+   - Check container resource limits in `devcontainer.json` (`--cpus` and `--memory`)
+   - Increase limits if your host has available resources
+   - See "Adjusting Resource Limits" section below
+
+2. **Host resource exhaustion**
+   - Check host CPU/memory usage with `top` or Activity Monitor
+   - Close unnecessary applications
+   - Reduce container resource limits if host is constrained
+
+3. **Memory limit too low**
+   - Claude Code needs minimum 2GB RAM
+   - If seeing OOM (Out of Memory) errors, increase `--memory` value
+   - Check container logs: `podman logs <container-id>`
+
 ## Customization
 
 ### Adding VSCode Extensions
@@ -383,6 +435,49 @@ RUN apt-get update && apt-get install -y \
     your-package-here \
     && apt-get clean
 ```
+
+### Adjusting Resource Limits
+
+The container has default resource limits to prevent consuming all host resources:
+- **CPU**: 4 CPUs (default)
+- **Memory**: 8GB RAM (default)
+
+To adjust these limits, edit `devcontainer.json`:
+
+```jsonc
+"runArgs": [
+  // ... other args ...
+  "--cpus=2",      // Reduce to 2 CPUs
+  "--memory=4g"    // Reduce to 4GB RAM
+]
+```
+
+**Common configurations:**
+
+| Use Case | CPUs | Memory | Notes |
+|----------|------|--------|-------|
+| Light development | 2 | 4g | Minimal resource usage |
+| Standard development | 4 | 8g | Default, balanced |
+| Heavy builds/testing | 8 | 16g | Resource-intensive tasks |
+| Constrained host | 1 | 2g | Low-powered machines (may be slow) |
+
+**Finding your host's resources:**
+```bash
+# CPU cores
+nproc  # Linux
+sysctl -n hw.ncpu  # macOS
+
+# Total memory
+free -h  # Linux
+sysctl hw.memsize  # macOS
+```
+
+**Recommendations:**
+- Allocate no more than 75% of host CPU cores
+- Allocate no more than 75% of host RAM
+- Leave resources for host OS and other applications
+- Claude Code alone needs ~2GB RAM minimum
+- Increase limits for memory-intensive builds or large codebases
 
 ### Relaxing Security (Not Recommended)
 
@@ -456,4 +551,4 @@ Before using this configuration in production or with sensitive data:
 
 ## License
 
-This DevContainer configuration follows the same license as the cudf-metal project.
+MIT License - Free to use and modify for your own projects.

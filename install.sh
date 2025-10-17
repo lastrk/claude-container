@@ -3,8 +3,8 @@ set -e
 
 # Secure DevContainer Configuration Installer
 # Self-contained installer with all configuration files embedded
-# Generated from commit: 11732d4
-# Build date: 2025-10-13 10:37:21
+# Generated from commit: f52c04a
+# Build date: 2025-10-13 16:56:35
 
 
 # Colors for output
@@ -69,7 +69,6 @@ echo ""
 echo "     • devcontainer.json"
 echo "     • Dockerfile"
 echo "     • generate-claude-config.sh"
-echo "     • claude.json.template"
 echo "     • CLAUDE.md"
 echo ""
 echo "  3. Set proper permissions (generate-claude-config.sh +x)"
@@ -112,7 +111,7 @@ cat > "${DEVCONTAINER_DIR}/devcontainer.json" << 'EOF_devcontainer_json'
 	// Purpose: Helps identify this container in VSCode's Remote Explorer
 	// Why necessary: Multiple containers may be running; name distinguishes them
 	// Impact: Purely cosmetic, no security or functional impact
-	"name": "cudf-metal Development Container",
+	"name": "Claude Code Development Container",
 
 	// Build Configuration: How to build the container image
 	// Purpose: Tells VSCode where to find Dockerfile and what context to use
@@ -208,6 +207,30 @@ cat > "${DEVCONTAINER_DIR}/devcontainer.json" << 'EOF_devcontainer_json'
 		// Impact: Without this, some authentication operations may fail
 		"--cap-add=AUDIT_WRITE",
 
+		// Capability Add: CHOWN (Change file ownership)
+		// Purpose: Allows changing file/directory ownership and group
+		// Why necessary: Package managers (apt, npm, pip) often change ownership during installation
+		// Use case: Installing system packages, fixing file permissions, package post-install scripts
+		// Security risk: Low - limited to container filesystem, can't affect host
+		// Developer benefit: Prevents "operation not permitted" errors during package installation
+		"--cap-add=CHOWN",
+
+		// Capability Add: NET_BIND_SERVICE (Bind to privileged ports)
+		// Purpose: Allows binding to ports below 1024 (80, 443, etc.)
+		// Why useful: Run web servers on standard HTTP/HTTPS ports without root
+		// Use case: Development web servers, testing production-like configurations
+		// Security risk: Minimal - ports are only accessible within container network (slirp4netns)
+		// Developer benefit: Can run 'python -m http.server 80' or nginx on port 80
+		"--cap-add=NET_BIND_SERVICE",
+
+		// Capability Add: NET_RAW (Use raw/packet sockets)
+		// Purpose: Allows creating raw sockets for ICMP and other protocols
+		// Why useful: Enables ping, traceroute, and other network diagnostic tools
+		// Use case: Network debugging, connectivity testing, diagnosing latency issues
+		// Security risk: Low - limited to container's network namespace (slirp4netns isolation)
+		// Developer benefit: Can use 'ping google.com' and 'traceroute' for network debugging
+		"--cap-add=NET_RAW",
+
 		// Network Mode: slirp4netns (User-mode networking)
 		// Purpose: Isolates container network from host while allowing internet
 		// Why slirp4netns: User-mode TCP/IP stack, no root privileges required
@@ -238,7 +261,26 @@ cat > "${DEVCONTAINER_DIR}/devcontainer.json" << 'EOF_devcontainer_json'
 		// Rootless Podman: Essential for proper file permissions
 		// Docker equivalent: Handled automatically by Docker Desktop on macOS/Windows
 		// Security: Isolates user namespace, prevents container from accessing other users' files
-		"--userns=keep-id"
+		"--userns=keep-id",
+
+		// CPU Limit: Restrict CPU usage
+		// Purpose: Prevents container from consuming all host CPU resources
+		// Format: Number of CPUs (can be fractional, e.g., 0.5 = 50% of one CPU)
+		// Default: 4 CPUs - good balance for development workloads
+		// Why limit: Prevents runaway processes from impacting host system
+		// Override: Change this value based on your needs and host capabilities
+		// Docker/Podman: Both support --cpus flag
+		"--cpus=4",
+
+		// Memory Limit: Restrict RAM usage
+		// Purpose: Prevents container from consuming all host memory
+		// Format: Number with unit (m=MB, g=GB), e.g., "8g" = 8 gigabytes
+		// Default: 8GB - sufficient for most development tasks with Claude Code
+		// Why limit: Prevents OOM situations from affecting host stability
+		// Override: Increase for memory-intensive tasks, decrease for resource-constrained hosts
+		// Minimum recommended: 4GB for Claude Code + basic development
+		// Docker/Podman: Both support --memory flag
+		"--memory=8g"
 	],
 
 	// Features: Pre-packaged DevContainer functionality modules
@@ -270,23 +312,11 @@ cat > "${DEVCONTAINER_DIR}/devcontainer.json" << 'EOF_devcontainer_json'
 		// Persistence: Extensions installed in container, not on host
 		"vscode": {
 			// Extensions: VSCode extensions to install automatically
-			// Purpose: Provides IDE functionality for C++ development
+			// Purpose: Provides IDE functionality for development
 			// Format: Array of extension IDs from VSCode marketplace
 			// Why auto-install: Ensures consistent dev environment for all users
 			// Installation: Happens once during container creation (cached in image)
 			"extensions": [
-				// C/C++ Extension: IntelliSense, debugging, code navigation
-				// Purpose: Required for C++ language support in VSCode
-				// Why necessary: Project is C++ (compiles to Metal shaders)
-				// Provides: Syntax highlighting, autocomplete, error checking, debugging
-				"ms-vscode.cpptools",
-
-				// CMake Tools: CMake project support
-				// Purpose: Integration with CMake build system
-				// Why necessary: Project uses CMakeLists.txt for building
-				// Provides: CMake configuration, build/test from VSCode, target selection
-				"ms-vscode.cmake-tools",
-
 				// GitLens: Enhanced Git capabilities
 				// Purpose: Advanced Git visualization and history exploration
 				// Why useful: Blame annotations, commit history, repository insights
@@ -444,12 +474,12 @@ ENV DEBIAN_FRONTEND=noninteractive
 # Security: Uses official package repositories, validates with apt-get update
 RUN apt-get update && apt-get install -y \
     # Build Essential: GCC, G++, make, libc-dev
-    # Purpose: Required for compiling C++ code (this project uses C++/Metal)
-    # Why necessary: CMake projects need a C++ compiler
+    # Purpose: Required for compiling code
+    # Why necessary: Common development tool for compilation tasks
     build-essential \
     # CMake: Cross-platform build system generator
-    # Purpose: This project uses CMakeLists.txt for building
-    # Why necessary: Explicitly required by project's build instructions
+    # Purpose: Flexible build system for various projects
+    # Why included: Many projects use CMake for building
     cmake \
     # Ninja: Fast build system (alternative to make)
     # Purpose: Faster parallel builds than traditional make
@@ -460,8 +490,8 @@ RUN apt-get update && apt-get install -y \
     # Why needed: Many CMake scripts use pkg-config to find dependencies
     pkg-config \
     # Python 3: Interpreted language
-    # Purpose: Project has Python tools (tools/check_api_coverage.py, etc.)
-    # Why necessary: Project documentation references Python scripts
+    # Purpose: General-purpose scripting and tooling
+    # Why necessary: Common tool for project automation and scripts
     python3 \
     # Python Pip: Package installer for Python
     # Purpose: Allows installing Python packages needed by project tools
@@ -615,36 +645,6 @@ echo "Generated $OUTPUT with OAuth config"
 EOF_generate_claude_config_sh
 print_success "Created generate-claude-config.sh"
 
-# Extracting claude.json.template
-cat > "${DEVCONTAINER_DIR}/claude.json.template" << 'EOF_claude_json_template'
-{
-  "numStartups": 1,
-  "installMethod": "devcontainer",
-  "autoUpdates": true,
-  "cachedStatsigGates": {
-    "tengu_disable_bypass_permissions_mode": false,
-    "tengu_tool_pear": false
-  },
-  "sonnet45MigrationComplete": true,
-  "shiftEnterKeyBindingInstalled": true,
-  "hasCompletedOnboarding": true,
-  "hasOpusPlanDefault": false,
-  "projects": {
-    "/workspace": {
-      "allowedTools": [],
-      "history": [],
-      "mcpContextUris": [],
-      "mcpServers": {},
-      "enabledMcpjsonServers": [],
-      "disabledMcpjsonServers": [],
-      "hasTrustDialogAccepted": true,
-      "ignorePatterns": []
-    }
-  }
-}
-EOF_claude_json_template
-print_success "Created claude.json.template"
-
 # Extracting CLAUDE.md
 cat > "${DEVCONTAINER_DIR}/CLAUDE.md" << 'EOF_CLAUDE_md'
 # CLAUDE.md
@@ -653,335 +653,310 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a secure DevContainer configuration for running Claude Code in a hardened, Podman-compatible container environment. The configuration implements defense-in-depth security principles and Microsoft's DevContainer best practices.
+This repository contains a **self-contained DevContainer installer** for running Claude Code in a secure, Podman-compatible containerized environment. The project implements a unique build system that generates a single-file installer (`install.sh`) with all configuration files embedded as heredocs.
 
-## Key Architecture Concepts
+**Key concept**: The installer is built once and can be distributed as a single bash script that contains everything needed to set up the DevContainer configuration in any Git repository.
 
-### Security Model
+## Project Architecture
 
-The container implements multiple layers of security isolation:
+### Build System Architecture
 
-1. **Non-root execution**: Container runs as `vscode` user (UID 1000), never root
-2. **Minimal capabilities**: Uses `--cap-drop=ALL` then selectively adds only SETUID, SETGID, and AUDIT_WRITE
-3. **Network isolation**: `slirp4netns` provides user-mode networking (allows internet, blocks host services)
-4. **Privilege escalation prevention**: `--security-opt=no-new-privileges` prevents setuid exploitation
-5. **User namespace mapping**: `--userns=keep-id` (Podman) maps container UID to host UID for proper file ownership
+The project uses a **two-stage distribution model**:
 
-### Authentication Flow
+1. **Source files** (this repository):
+   - `devcontainer.json` - DevContainer configuration with security hardening
+   - `Dockerfile` - Container image definition
+   - `generate-claude-config.sh` - Runtime authentication configuration script
+   - `CLAUDE.md` - Documentation embedded in installer
 
-Claude Code authentication happens automatically during container creation:
+2. **build.sh** - Build script that:
+   - Reads all source files
+   - Embeds them as heredocs in a single bash script
+   - Adds extraction and installation logic
+   - Produces self-contained `install.sh`
 
-1. **Host extraction** (`initializeCommand`): Before container starts, extracts API key from macOS keychain and OAuth config from `~/.claude.json` on host
-2. **File staging**: Writes `.devcontainer/.claude-token` and `.devcontainer/.claude-oauth.json` (both gitignored)
-3. **Container injection** (`postCreateCommand`): After container starts, `generate-claude-config.sh` merges OAuth config and API key into container's `~/.claude.json`
-4. **No manual login**: Claude Code works immediately without authentication prompts
+3. **install.sh** (generated artifact):
+   - Single distributable file (~44KB)
+   - Contains all configuration files embedded
+   - Can be run in any Git repository
+   - Extracts files to `.devcontainer/` directory
 
-### Container Lifecycle Hooks
+### Authentication Flow Architecture
 
-- **initializeCommand**: Runs on HOST before container creation - extracts secrets from keychain/OAuth
-- **postCreateCommand**: Runs in CONTAINER after creation - installs Claude Code, generates config, verifies git
-- **shutdownAction**: `stopContainer` preserves container state but stops processes when VSCode disconnects
+Multi-layered authentication system for Claude Code:
+
+```
+Host System (macOS)
+  ↓ initializeCommand (runs before container creation)
+  ├─→ Extract API key from macOS keychain
+  │   └─→ Write to .devcontainer/.claude-token (gitignored)
+  └─→ Extract OAuth config from ~/.claude.json
+      └─→ Write to .devcontainer/.claude-oauth.json (gitignored)
+
+Container Creation
+  ↓ postCreateCommand (runs inside container after creation)
+  ├─→ Install Claude Code via npm
+  └─→ Run generate-claude-config.sh
+      ├─→ Read .claude-token and .claude-oauth.json
+      ├─→ Generate ~/.claude.json (OAuth + API key)
+      └─→ Generate ~/.claude/settings.json (ANTHROPIC_API_KEY env var)
+
+Result: Claude Code authenticated without manual login
+```
+
+**Critical implementation details**:
+- `initializeCommand` runs on HOST before container exists
+- `postCreateCommand` runs INSIDE container after it's created
+- Two authentication methods for compatibility (OAuth + env var)
+- Token files are gitignored and never committed
+- `tr -d '\n'` strips trailing newline from keychain token (required)
+
+### Security Architecture
+
+Defense-in-depth container hardening via `runArgs` in devcontainer.json:
+
+1. **Capability Model**: Drop ALL, add only essential capabilities:
+   - SETUID/SETGID (user switching, sudo)
+   - AUDIT_WRITE (authentication logging)
+   - CHOWN (package manager file ownership)
+   - NET_BIND_SERVICE (bind to ports 80/443)
+   - NET_RAW (ping/traceroute for debugging)
+2. **Network Isolation**: slirp4netns (user-mode, blocks host services)
+3. **Privilege Escalation**: `--security-opt=no-new-privileges`
+4. **User Namespace**: `--userns=keep-id` (Podman rootless UID mapping)
+5. **Resource Limits**: `--cpus=4` and `--memory=8g` (configurable)
+
+### File Ownership Model
+
+The project root serves dual purposes:
+
+1. **Source repository**: DevContainer configuration files for this project
+2. **Installer generator**: Build system that creates distributable installer
+
+When `build.sh` runs, it reads files from project root and embeds them in `install.sh`, which users run in *their* repositories to install the DevContainer configuration.
 
 ## Common Commands
 
-### Container Management
+### Build the Installer
 
 ```bash
-# Open in VSCode DevContainer
-code /path/to/claude-container
-# Then: F1 -> "Dev Containers: Reopen in Container"
-
-# Rebuild container (after Dockerfile changes)
-# In VSCode: F1 -> "Dev Containers: Rebuild Container"
-
-# Check Podman machine status (macOS only)
-podman machine list
-podman machine start
-
-# View container logs
-podman ps -a  # Find container ID
-podman logs <container-id>
+# Generate install.sh with all files embedded
+./build.sh
 ```
 
-### Development Workflow
+**What it does**:
+- Reads all source files from project root
+- Generates git commit hash and build date
+- Creates heredocs for each file with EOF delimiters
+- Produces self-contained install.sh (~44KB)
+- Makes installer executable (chmod +x)
+
+**Files embedded** (defined in build.sh:31-36):
+1. devcontainer.json
+2. Dockerfile
+3. generate-claude-config.sh
+4. CLAUDE.md (this file)
+
+### Test the Installer Locally
 
 ```bash
-# Verify Claude Code installation
-claude --version
+# Create test repository
+mkdir /tmp/test-repo && cd /tmp/test-repo
+git init
 
-# Check authentication
-cat ~/.claude.json  # Should contain OAuth config and API key
-cat ~/.claude/settings.json  # Should contain ANTHROPIC_API_KEY
-
-# Manual authentication if needed
-TOKEN=$(cat /workspace/.devcontainer/.claude-token)
-/workspace/.devcontainer/generate-claude-config.sh
-
-# Git operations (pre-configured)
-git status
-git add .
-git commit -m "message"
-git push
+# Run installer
+bash /path/to/claude-container/install.sh
 ```
 
-### Installing Additional Tools
+**Expected behavior**:
+- Checks if .devcontainer/ already exists (errors if present)
+- Shows interactive prompt with ESC to cancel
+- Creates .devcontainer/ directory
+- Extracts all embedded files
+- Makes generate-claude-config.sh executable
+- Adds .claude-token and .claude-oauth.json to .gitignore
+
+### Run Claude Code in Unsupervised Mode
+
+After the container is running, start Claude Code in fully autonomous mode:
 
 ```bash
-# System packages (requires sudo)
-sudo apt-get update
-sudo apt-get install <package-name>
-
-# Python packages
-pip3 install <package-name>
-
-# NPM packages (global)
-npm install -g <package-name>  # Uses ~/.npm-global prefix
+# Inside the container
+claude --dangerously-skip-permissions
 ```
 
-## File Structure
+**What this does**:
+- Bypasses all permission prompts for tool usage
+- Enables fully autonomous operation
+- Allows Claude Code to execute commands without confirmation
 
-```
-.devcontainer/
-├── devcontainer.json          # DevContainer configuration with security settings
-├── Dockerfile                 # Multi-stage build with development tools
-├── claude.json.template       # Claude Code config template (DEPRECATED - see below)
-├── generate-claude-config.sh  # Generates ~/.claude.json from OAuth + token
-├── .claude-token             # API key extracted from keychain (gitignored)
-└── .claude-oauth.json        # OAuth config extracted from host (gitignored)
-```
+**Security considerations**:
+- ⚠️ Only use in sandboxed/isolated environments
+- The container already provides isolation (capabilities dropped, network isolated, resource limited)
+- This flag grants unrestricted access within the container's security boundaries
+- Appropriate for CI/CD, automated workflows, or development in isolated containers
 
-## Important Implementation Details
+### Modify Configuration Files
 
-### Why No .dockerignore?
-
-The `.dockerignore` file is intentionally absent because:
-- Build context is the project root (`context: ".."` in devcontainer.json)
-- No files from project root are COPYed into the image during build
-- All tools installed via apt/npm, no project files needed at build time
-- Runtime mounts handle project file access (not build-time COPY)
-
-### OAuth Account Extraction
-
-The `initializeCommand` extracts OAuth account info from host `~/.claude.json`:
-```bash
-jq '{oauthAccount, userID, hasAvailableSubscription}' ~/.claude.json > .devcontainer/.claude-oauth.json
-```
-
-This preserves organization/team settings when authenticating in the container.
-
-### API Key Handling
-
-Two authentication methods are configured:
-
-1. **settings.json** (primary): `~/.claude/settings.json` with `ANTHROPIC_API_KEY` in `env` field
-2. **.claude.json** (OAuth): `~/.claude.json` with full OAuth config and `customApiKeyResponses.approved` array
-
-Both are generated during `postCreateCommand` for maximum compatibility.
-
-### VSCode Server Directory
-
-The `/vscode` directory is created with 777 permissions (not mounted) because:
-- VSCode Server needs to install itself on first connection
-- With `--userns=keep-id`, ownership mapping makes volume mounts complex
-- Trade-off: Server reinstalls on each rebuild (acceptable for dev container)
-- Simpler than maintaining persistent volume for VS Code extensions
-
-### Git Safe Directory
-
-`git config --system --add safe.directory /workspace` in Dockerfile prevents "dubious ownership" errors that occur when:
-- Mounted volume UID/GID differs from container user
-- Git security checks refuse to operate on "untrusted" repositories
-- System-wide config ensures it works even after user switches
-
-## Troubleshooting
-
-### Authentication Failures
-
-If Claude Code can't authenticate:
+When editing configuration files, you must rebuild the installer:
 
 ```bash
-# Verify files exist
-ls -la /workspace/.devcontainer/.claude-*
+# 1. Edit source file
+vim devcontainer.json
 
-# Check token content (should be long alphanumeric string)
-cat /workspace/.devcontainer/.claude-token
+# 2. Rebuild installer
+./build.sh
 
-# Regenerate config manually
-/workspace/.devcontainer/generate-claude-config.sh
-
-# Check generated config
-cat ~/.claude.json
-cat ~/.claude/settings.json
+# 3. Commit both source and generated installer
+git add devcontainer.json install.sh
+git commit -m "Update devcontainer configuration"
 ```
 
-### Git "Dubious Ownership" Errors
+**Important**: install.sh is a build artifact but is tracked in git because it's the primary distribution method. Both source files and generated installer must stay in sync.
 
-If git refuses to operate:
+### Adjust Resource Limits
 
-```bash
-# Should already be configured, but verify
-git config --system --list | grep safe.directory
-
-# Add manually if missing
-git config --global --add safe.directory /workspace
-```
-
-### Permission Denied on Workspace Files
-
-If you can't write to `/workspace`:
-
-```bash
-# On host (outside container)
-ls -la /path/to/claude-container
-chown -R $(whoami) /path/to/claude-container
-
-# Check UID mapping (inside container)
-id  # Should show UID matching host user
-```
-
-### Network Isolation Issues
-
-The container intentionally cannot access host services (e.g., `localhost:3000` on host). This is by design for security.
-
-If you need to access host services:
-- Use `--network=host` in `runArgs` (removes network isolation, less secure)
-- Or run service in separate container and link via Docker Compose
-
-### Podman Machine Not Running (macOS)
-
-```bash
-podman machine list
-# If not running:
-podman machine start
-
-# If doesn't exist:
-podman machine init
-podman machine start
-```
-
-## Security Considerations
-
-### What the Container Can Do
-
-- Read/write project files in `/workspace`
-- Install packages via apt (with sudo)
-- Install Python/NPM packages
-- Access internet (HTTP/HTTPS)
-- Clone/push to Git repositories
-
-### What the Container Cannot Do
-
-- Access host services (e.g., databases on localhost)
-- Mount additional host directories
-- Access host filesystem outside `/workspace`
-- Perform privileged kernel operations
-- Escape to host system (capabilities dropped)
-- Gain elevated privileges via setuid binaries
-
-### Modifying Security Settings
-
-To add capabilities (only if absolutely necessary):
+Edit `devcontainer.json` runArgs array:
 
 ```jsonc
-// In devcontainer.json runArgs:
-"--cap-add=CAP_NAME"
+"runArgs": [
+  // ... other flags ...
+  "--cpus=2",      // Default: 4
+  "--memory=4g"    // Default: 8g
+]
 ```
 
-To allow host network access (reduces isolation):
+Then rebuild: `./build.sh`
 
-```jsonc
-// In devcontainer.json runArgs (replace slirp4netns):
-"--network=host"
+## Key Implementation Details
+
+### Why Heredoc Embedding?
+
+The build system uses heredocs instead of base64 encoding or downloading files because:
+- Human-readable installer (can inspect what will be installed)
+- No dependencies (no base64, curl, wget required)
+- Preserves exact file content including comments
+- Single bash script is easily distributable via curl/wget
+
+### Dynamic Configuration Generation
+
+Authentication configuration is generated dynamically by `generate-claude-config.sh` using `jq -n`:
+1. `~/.claude/settings.json` with `env.ANTHROPIC_API_KEY` (primary)
+2. `~/.claude.json` generated with OAuth account info and token suffix
+
+No template file is needed - the script creates the JSON structure directly using jq.
+
+### File Naming Convention in build.sh
+
+Heredoc EOF delimiters use file names with special characters replaced:
+- `devcontainer.json` → `EOF_devcontainer_json`
+- `generate-claude-config.sh` → `EOF_generate_claude_config_sh`
+
+This is done by `${file//[.-]/_}` bash substitution (line 199).
+
+### Why install.sh is Tracked in Git
+
+Though install.sh is a generated artifact, it's tracked in version control because:
+- It's the primary distribution method (users curl from GitHub)
+- Allows users to download without cloning entire repo
+- Build date and commit hash embedded for traceability
+- Simplifies distribution via `curl -fsSL https://raw.githubusercontent.com/.../install.sh`
+
+## Modifying the Build System
+
+### Adding a New File to Embed
+
+1. Create the file in project root
+2. Add to `FILES` array in build.sh (line 31-36):
+   ```bash
+   FILES=(
+       "devcontainer.json"
+       "Dockerfile"
+       "your-new-file.txt"  # Add here
+   )
+   ```
+3. Update installer display in build.sh if needed (line 152-157)
+4. Rebuild: `./build.sh`
+
+### Changing Installer Behavior
+
+Installer logic is in three sections of build.sh:
+
+1. **Header** (line 78-93): Shebang, version info
+2. **Main logic** (line 94-193): Installation flow, error checking
+3. **Footer** (line 209-268): Post-install, .gitignore updates, next steps
+
+Edit the heredoc strings in build.sh, then rebuild.
+
+### Testing Changes
+
+```bash
+# 1. Make changes to source files or build.sh
+# 2. Rebuild
+./build.sh
+
+# 3. Test in clean directory
+cd /tmp && mkdir test-project && cd test-project
+git init
+bash /path/to/claude-container/install.sh
+
+# 4. Verify extraction
+ls -la .devcontainer/
+cat .devcontainer/devcontainer.json
+
+# 5. Test in VSCode (optional)
+code .
+# F1 → "Dev Containers: Reopen in Container"
 ```
 
-**Warning**: Only relax security if you understand the implications.
+## Troubleshooting the Build System
 
-## VSCode Extensions
+### "Missing source file" error
 
-Pre-installed extensions for C++ development:
-- `ms-vscode.cpptools` - C/C++ IntelliSense, debugging
-- `ms-vscode.cmake-tools` - CMake integration
-- `eamodio.gitlens` - Git visualization
-- `editorconfig.editorconfig` - Consistent code style
+**Cause**: build.sh expects all files in `FILES` array to exist
 
-Add more in `devcontainer.json`:
+**Solution**: Ensure all files listed in build.sh:31-36 are present in project root
 
-```jsonc
-"customizations": {
-  "vscode": {
-    "extensions": [
-      "existing.extension",
-      "your.new.extension"
-    ]
-  }
-}
-```
+### Installer creates malformed files
 
-## Customization
+**Cause**: Heredoc EOF delimiter collision (file contains `EOF_filename` string)
 
-### Adding System Packages
+**Solution**: Change delimiter name in build.sh:199 to something unique
 
-Edit `Dockerfile`:
+### Git commit hash shows "unknown"
 
-```dockerfile
-RUN apt-get update && apt-get install -y \
-    existing-package \
-    your-new-package \
-    && apt-get clean
-```
+**Cause**: Not running in a git repository, or git not in PATH
 
-### Changing Base Image
+**Solution**: Run build.sh from within the git repository, ensure git is installed
 
-Current: `mcr.microsoft.com/devcontainers/base:ubuntu-22.04`
+## Platform Compatibility Notes
 
-To change:
-- Update `FROM` line in `Dockerfile`
-- Ensure new image has `vscode` user or create it
-- Update package manager commands if not Ubuntu/Debian
+### macOS-specific Features
 
-### Adding Port Forwarding
+The `initializeCommand` in devcontainer.json uses macOS-specific commands:
+- `security find-generic-password` - Extracts from keychain
+- `tr -d '\n'` - Removes trailing newline from keychain output
 
-If running web services in container:
-
-```jsonc
-// In devcontainer.json:
-"forwardPorts": [3000, 8080]
-```
-
-## Platform Compatibility
+**For Linux/Windows**: Users must modify initializeCommand or authenticate interactively inside container.
 
 ### Podman vs Docker
 
 Configuration works with both:
-- **Podman**: `--userns=keep-id` provides rootless UID mapping
-- **Docker**: Desktop handles UID mapping automatically (flag ignored)
+- `--userns=keep-id` is Podman-specific (Docker ignores it gracefully)
+- `--cpus` and `--memory` work on both Docker and Podman
+- Network mode `slirp4netns` is optimal for rootless Podman
 
-To use Podman in VSCode:
+Users can set VSCode to use Podman via settings: `"dev.containers.dockerPath": "podman"`
 
-```json
-// .vscode/settings.json or user settings
-{
-  "dev.containers.dockerPath": "podman"
-}
-```
+## Documentation Locations
 
-### macOS Requirements
+The project has documentation in multiple locations:
 
-- Podman Machine must be running
-- Keychain stores Claude Code API key
-- `initializeCommand` uses `security` command to extract token
+1. **README.md** (project root): User-facing documentation, installation instructions
+2. **CLAUDE.md** (this file, project root): Architecture and development guidance
+3. **.devcontainer/CLAUDE.md** (generated): Copy of this file, embedded in installer, appears in user's projects
 
-### Linux/Windows
-
-`initializeCommand` assumes macOS keychain. Modify for other platforms:
-
-```jsonc
-// For manual token file:
-"initializeCommand": "echo 'YOUR_TOKEN' > ${localWorkspaceFolder}/.devcontainer/.claude-token"
-
-// Or skip and authenticate interactively:
-"initializeCommand": "echo 'Skipping token extraction'"
-```
+When updating documentation, remember that CLAUDE.md gets embedded in the installer and distributed to users.
 
 EOF_CLAUDE_md
 print_success "Created CLAUDE.md"
@@ -1010,7 +985,6 @@ echo ""
 echo "  ✓ .devcontainer/devcontainer.json"
 echo "  ✓ .devcontainer/Dockerfile"
 echo "  ✓ .devcontainer/generate-claude-config.sh"
-echo "  ✓ .devcontainer/claude.json.template"
 echo "  ✓ .devcontainer/CLAUDE.md"
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -1018,7 +992,7 @@ echo "  Next Steps"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 echo "1. Review the configuration:"
-echo "   ${YELLOW}cat .devcontainer/CLAUDE.md${NC}"
+echo -e "   ${YELLOW}cat .devcontainer/CLAUDE.md${NC}"
 echo ""
 echo "2. Configure VSCode to use Podman (if not already done):"
 echo "   Add to .vscode/settings.json or user settings:"
@@ -1027,11 +1001,11 @@ echo '     "dev.containers.dockerPath": "podman"'
 echo "   }"
 echo ""
 echo "3. Open this repository in VSCode:"
-echo "   ${YELLOW}code ${REPO_ROOT}${NC}"
+echo -e "   ${YELLOW}code ${REPO_ROOT}${NC}"
 echo ""
 echo "4. Reopen in DevContainer:"
-echo "   Press ${YELLOW}F1${NC} (or ${YELLOW}Cmd+Shift+P${NC} / ${YELLOW}Ctrl+Shift+P${NC})"
-echo "   Type: ${YELLOW}Dev Containers: Reopen in Container${NC}"
+echo -e "   Press ${YELLOW}F1${NC} (or ${YELLOW}Cmd+Shift+P${NC} / ${YELLOW}Ctrl+Shift+P${NC})"
+echo -e "   Type: ${YELLOW}Dev Containers: Reopen in Container${NC}"
 echo "   Press Enter"
 echo ""
 echo "5. Wait for container to build (first time takes ~5 minutes)"
@@ -1040,6 +1014,12 @@ echo "The container will automatically:"
 echo "  • Install Claude Code"
 echo "  • Configure authentication (macOS keychain)"
 echo "  • Set up development tools"
+echo ""
+echo "6. Run Claude Code in unsupervised mode (inside container):"
+echo -e "   ${YELLOW}claude --dangerously-skip-permissions${NC}"
+echo ""
+echo "   This enables fully autonomous operation without permission prompts."
+echo "   ⚠️  Use only in sandboxed environments - grants unrestricted access."
 echo ""
 print_info "For troubleshooting, see: .devcontainer/CLAUDE.md"
 echo ""

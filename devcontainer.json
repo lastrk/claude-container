@@ -3,7 +3,7 @@
 	// Purpose: Helps identify this container in VSCode's Remote Explorer
 	// Why necessary: Multiple containers may be running; name distinguishes them
 	// Impact: Purely cosmetic, no security or functional impact
-	"name": "cudf-metal Development Container",
+	"name": "Claude Code Development Container",
 
 	// Build Configuration: How to build the container image
 	// Purpose: Tells VSCode where to find Dockerfile and what context to use
@@ -99,6 +99,30 @@
 		// Impact: Without this, some authentication operations may fail
 		"--cap-add=AUDIT_WRITE",
 
+		// Capability Add: CHOWN (Change file ownership)
+		// Purpose: Allows changing file/directory ownership and group
+		// Why necessary: Package managers (apt, npm, pip) often change ownership during installation
+		// Use case: Installing system packages, fixing file permissions, package post-install scripts
+		// Security risk: Low - limited to container filesystem, can't affect host
+		// Developer benefit: Prevents "operation not permitted" errors during package installation
+		"--cap-add=CHOWN",
+
+		// Capability Add: NET_BIND_SERVICE (Bind to privileged ports)
+		// Purpose: Allows binding to ports below 1024 (80, 443, etc.)
+		// Why useful: Run web servers on standard HTTP/HTTPS ports without root
+		// Use case: Development web servers, testing production-like configurations
+		// Security risk: Minimal - ports are only accessible within container network (slirp4netns)
+		// Developer benefit: Can run 'python -m http.server 80' or nginx on port 80
+		"--cap-add=NET_BIND_SERVICE",
+
+		// Capability Add: NET_RAW (Use raw/packet sockets)
+		// Purpose: Allows creating raw sockets for ICMP and other protocols
+		// Why useful: Enables ping, traceroute, and other network diagnostic tools
+		// Use case: Network debugging, connectivity testing, diagnosing latency issues
+		// Security risk: Low - limited to container's network namespace (slirp4netns isolation)
+		// Developer benefit: Can use 'ping google.com' and 'traceroute' for network debugging
+		"--cap-add=NET_RAW",
+
 		// Network Mode: slirp4netns (User-mode networking)
 		// Purpose: Isolates container network from host while allowing internet
 		// Why slirp4netns: User-mode TCP/IP stack, no root privileges required
@@ -129,7 +153,26 @@
 		// Rootless Podman: Essential for proper file permissions
 		// Docker equivalent: Handled automatically by Docker Desktop on macOS/Windows
 		// Security: Isolates user namespace, prevents container from accessing other users' files
-		"--userns=keep-id"
+		"--userns=keep-id",
+
+		// CPU Limit: Restrict CPU usage
+		// Purpose: Prevents container from consuming all host CPU resources
+		// Format: Number of CPUs (can be fractional, e.g., 0.5 = 50% of one CPU)
+		// Default: 4 CPUs - good balance for development workloads
+		// Why limit: Prevents runaway processes from impacting host system
+		// Override: Change this value based on your needs and host capabilities
+		// Docker/Podman: Both support --cpus flag
+		"--cpus=4",
+
+		// Memory Limit: Restrict RAM usage
+		// Purpose: Prevents container from consuming all host memory
+		// Format: Number with unit (m=MB, g=GB), e.g., "8g" = 8 gigabytes
+		// Default: 8GB - sufficient for most development tasks with Claude Code
+		// Why limit: Prevents OOM situations from affecting host stability
+		// Override: Increase for memory-intensive tasks, decrease for resource-constrained hosts
+		// Minimum recommended: 4GB for Claude Code + basic development
+		// Docker/Podman: Both support --memory flag
+		"--memory=8g"
 	],
 
 	// Features: Pre-packaged DevContainer functionality modules
@@ -161,23 +204,11 @@
 		// Persistence: Extensions installed in container, not on host
 		"vscode": {
 			// Extensions: VSCode extensions to install automatically
-			// Purpose: Provides IDE functionality for C++ development
+			// Purpose: Provides IDE functionality for development
 			// Format: Array of extension IDs from VSCode marketplace
 			// Why auto-install: Ensures consistent dev environment for all users
 			// Installation: Happens once during container creation (cached in image)
 			"extensions": [
-				// C/C++ Extension: IntelliSense, debugging, code navigation
-				// Purpose: Required for C++ language support in VSCode
-				// Why necessary: Project is C++ (compiles to Metal shaders)
-				// Provides: Syntax highlighting, autocomplete, error checking, debugging
-				"ms-vscode.cpptools",
-
-				// CMake Tools: CMake project support
-				// Purpose: Integration with CMake build system
-				// Why necessary: Project uses CMakeLists.txt for building
-				// Provides: CMake configuration, build/test from VSCode, target selection
-				"ms-vscode.cmake-tools",
-
 				// GitLens: Enhanced Git capabilities
 				// Purpose: Advanced Git visualization and history exploration
 				// Why useful: Blame annotations, commit history, repository insights

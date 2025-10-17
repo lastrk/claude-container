@@ -29,12 +29,12 @@ ENV DEBIAN_FRONTEND=noninteractive
 # Security: Uses official package repositories, validates with apt-get update
 RUN apt-get update && apt-get install -y \
     # Build Essential: GCC, G++, make, libc-dev
-    # Purpose: Required for compiling C++ code (this project uses C++/Metal)
-    # Why necessary: CMake projects need a C++ compiler
+    # Purpose: Required for compiling code
+    # Why necessary: Common development tool for compilation tasks
     build-essential \
     # CMake: Cross-platform build system generator
-    # Purpose: This project uses CMakeLists.txt for building
-    # Why necessary: Explicitly required by project's build instructions
+    # Purpose: Flexible build system for various projects
+    # Why included: Many projects use CMake for building
     cmake \
     # Ninja: Fast build system (alternative to make)
     # Purpose: Faster parallel builds than traditional make
@@ -45,8 +45,8 @@ RUN apt-get update && apt-get install -y \
     # Why needed: Many CMake scripts use pkg-config to find dependencies
     pkg-config \
     # Python 3: Interpreted language
-    # Purpose: Project has Python tools (tools/check_api_coverage.py, etc.)
-    # Why necessary: Project documentation references Python scripts
+    # Purpose: General-purpose scripting and tooling
+    # Why necessary: Common tool for project automation and scripts
     python3 \
     # Python Pip: Package installer for Python
     # Purpose: Allows installing Python packages needed by project tools
