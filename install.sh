@@ -3,8 +3,8 @@ set -e
 
 # Secure DevContainer Configuration Installer
 # Self-contained installer with all configuration files embedded
-# Generated from commit: bbd8655
-# Build date: 2025-10-17 13:10:46
+# Generated from commit: 69ddd32
+# Build date: 2025-10-24 15:35:25
 
 
 # Colors for output
