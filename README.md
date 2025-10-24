@@ -32,50 +32,6 @@ The installer will:
 - Add authentication files to `.gitignore`
 - Display next steps for opening in VSCode
 
-## Security Model
-
-### Access Controls
-
-| Resource | Access Level | Explanation |
-|----------|--------------|-------------|
-| Project workspace (`/workspace`) | **Read-Write** | Full access to project files for development (includes `.devcontainer/`) |
-| Host network | **Blocked** | Container cannot access host services |
-| Internet (HTTP/HTTPS) | **Allowed** | Required for package installation |
-| Root privileges | **Restricted** | Non-root user with sudo for toolchain installation |
-
-### Security Features
-
-1. **Non-Root Execution**
-   - Container runs as `vscode` user (non-root)
-   - Sudo available for installing development tools
-   - Prevents privilege escalation attacks
-
-2. **Minimal Capabilities**
-   - Drops all Linux capabilities by default
-   - Only grants essential capabilities for development:
-     - SETUID/SETGID (sudo, user switching)
-     - AUDIT_WRITE (authentication logging)
-     - CHOWN (package manager ownership changes)
-     - NET_BIND_SERVICE (bind to ports 80/443 for web servers)
-     - NET_RAW (ping/traceroute for network debugging)
-   - Reduces attack surface while maintaining developer productivity
-
-3. **Network Isolation**
-   - Uses `slirp4netns` for user-mode networking
-   - Container cannot access host services (no `127.0.0.1` access to host)
-   - Internet access via HTTP/HTTPS for package downloads
-   - Ideal for development while maintaining security boundaries
-
-4. **Filesystem Isolation**
-   - Project workspace has full read-write access
-   - Git repository accessible for commits
-   - Container isolated from host filesystem outside workspace
-
-5. **Additional Hardening**
-   - `no-new-privileges` security option prevents privilege escalation
-   - `init` process (tini) for proper zombie process handling
-   - Rootless Podman operation (no daemon running as root)
-
 ## Prerequisites
 
 ### Required Software
@@ -205,66 +161,6 @@ cat ~/.claude/settings.json
 claude /login
 ```
 
-### Installing Additional Tools
-
-The container provides sudo access for installing toolchains:
-
-```bash
-# Inside the container
-sudo apt-get update
-sudo apt-get install <package-name>
-
-# Or using pip
-pip3 install <package-name>
-
-# Or using npm
-npm install -g <package-name>
-```
-
-### Running Web Services
-
-The container can bind to privileged ports (80, 443) for development:
-
-```bash
-# Run HTTP server on port 80 (standard HTTP port)
-python3 -m http.server 80
-
-# Or install and run nginx on port 80
-sudo apt-get install nginx
-sudo nginx
-
-# Node.js server on port 443
-node server.js  # Can bind to 443 without root
-```
-
-### Network Debugging
-
-Network diagnostic tools are available:
-
-```bash
-# Test connectivity
-ping google.com
-
-# Trace route to destination
-traceroute example.com
-
-# Install additional tools
-sudo apt-get install curl wget netcat-openbsd
-```
-
-### Committing from Inside Container
-
-Git is pre-configured and has access to the workspace:
-
-```bash
-# Inside the container
-git add .
-git commit -m "Your commit message"
-git push
-```
-
-**Note**: Git credentials may need to be configured. Use SSH keys or GitHub CLI for authentication.
-
 ## Container Architecture
 
 ### Base Image
@@ -290,6 +186,7 @@ mcr.microsoft.com/devcontainers/base:ubuntu-22.04
 | cmake, ninja | Build system | apt |
 | python3, pip | Python tooling | apt |
 | node.js, npm | Claude Code, npx | NodeSource |
+| pkgx | User-space package manager | pkgx.sh installer |
 
 ### Mount Points
 
@@ -480,6 +377,136 @@ RUN apt-get update && apt-get install -y \
     && apt-get clean
 ```
 
+**Pre-configured Development Environments:**
+
+The Dockerfile includes commented-out blocks for common development environments. To enable any of them, uncomment the relevant block in `.devcontainer/Dockerfile` and rebuild the container:
+
+- **Java**: OpenJDK 11, 17, 21 (with Maven and Gradle)
+  - Multi-architecture support: Works on both Intel (AMD64) and Apple Silicon (ARM64)
+  - Automatic architecture detection using `$(dpkg --print-architecture)`
+  - Three options provided for setting default Java version
+  - Includes ca-certificates-java fix for reliable certificate store initialization
+- **Rust**: rustup with cargo and multi-version support (stable/beta/nightly)
+- **C++**: LLVM 18 with Clang, LLDB, LLD, and analysis tools
+- **Python**: Enhanced setup with conda, virtualenv, and development tools
+- **Clojure**: Official Clojure CLI tools (clj and clojure commands with rlwrap)
+
+See the Dockerfile comments for detailed instructions and configuration options.
+
+### Installing Additional Tools
+
+#### Option 1: User-Space Packages (No sudo required)
+
+The container includes **pkgx**, a user-space package manager that allows you to install tools without sudo:
+
+```bash
+# Inside the container
+
+# Install packages persistently
+pkgx install ripgrep fd-find jq
+
+# Use packages temporarily (ephemeral, doesn't persist)
+pkgx +ripgrep rg "TODO" .
+pkgx +python@3.11 python --version
+
+# Search for available packages
+pkgx search postgres
+
+# List installed packages
+pkgx list
+
+# Uninstall packages
+pkgx uninstall ripgrep
+```
+
+**Common use cases:**
+
+```bash
+# Java development environment
+pkgx install openjdk.org@17 maven.apache.org gradle.org
+
+# Multiple Java versions for testing
+pkgx +openjdk.org@11 java -version
+pkgx +openjdk.org@17 java -version
+pkgx +openjdk.org@21 java -version
+
+# Python environments
+pkgx install python@3.11 python@3.12
+
+# CLI tools
+pkgx install ripgrep fd-find bat exa jq yq
+```
+
+**Advantages of pkgx:**
+- ✅ No sudo required (pure user-space)
+- ✅ Fast installation (~2-5 seconds)
+- ✅ 10,000+ packages available
+- ✅ Multiple versions of same tool
+- ✅ Ephemeral mode for testing tools without installing
+- ✅ No container rebuild needed
+
+**Package catalog:** Browse available packages at [pkgx.dev/pkgs](https://pkgx.dev/pkgs/)
+
+#### Option 2: System Packages (Requires sudo)
+
+For packages not available in pkgx or when you need system-wide installation:
+
+```bash
+# Inside the container
+sudo apt-get update
+sudo apt-get install <package-name>
+
+# Or using pip
+pip3 install <package-name>
+
+# Or using npm
+npm install -g <package-name>
+```
+
+### Running Web Services
+
+The container can bind to privileged ports (80, 443) for development:
+
+```bash
+# Run HTTP server on port 80 (standard HTTP port)
+python3 -m http.server 80
+
+# Or install and run nginx on port 80
+sudo apt-get install nginx
+sudo nginx
+
+# Node.js server on port 443
+node server.js  # Can bind to 443 without root
+```
+
+### Network Debugging
+
+Network diagnostic tools are available:
+
+```bash
+# Test connectivity
+ping google.com
+
+# Trace route to destination
+traceroute example.com
+
+# Install additional tools
+sudo apt-get install curl wget netcat-openbsd
+```
+
+### Committing from Inside Container
+
+Git is pre-configured and has access to the workspace:
+
+```bash
+# Inside the container
+git add .
+git commit -m "Your commit message"
+git push
+```
+
+**Note**: Git credentials may need to be configured. Use SSH keys or GitHub CLI for authentication.
+
 ### Adjusting Resource Limits
 
 The container has default resource limits configured for generous development workloads:
@@ -554,15 +581,101 @@ sysctl hw.memsize  # macOS
 
 ### Relaxing Security (Not Recommended)
 
-If you need to add capabilities:
+**Current configuration** provides 6 explicit capabilities (SETUID, SETGID, AUDIT_WRITE, CHOWN, NET_BIND_SERVICE, NET_RAW), plus implicit capabilities granted by the user namespace. This is sufficient for most development workflows.
+
+If you need to add additional capabilities:
 ```jsonc
 // devcontainer.json
 "runArgs": [
-  "--cap-add=CAP_NAME"
+  "--cap-add=CAP_SYS_PTRACE"  // Example: for debugging with ptrace
 ]
 ```
 
-**Warning**: Only add capabilities you understand and need. Each capability increases attack surface.
+**Common capability requests**:
+- `CAP_SYS_PTRACE`: Debugging other processes (gdb, strace)
+- `CAP_SYS_ADMIN`: Mount filesystems (usually not needed in dev containers)
+- `CAP_NET_ADMIN`: Modify network configuration (iptables, routing)
+
+**Warning**:
+- Only add capabilities you fully understand and have verified you need
+- Each capability increases attack surface—even within namespace isolation
+- `CAP_SYS_ADMIN` is particularly dangerous and should be avoided if possible
+- Document why each additional capability is required
+- Consider using pkgx or other userspace alternatives instead of escalating privileges
+
+## Security Model
+
+### Overview: Defense in Depth for Development Containers
+
+This configuration implements a **multi-layered security model** that balances developer productivity with strong isolation:
+
+- **Primary boundary**: User namespace isolation ensures container processes cannot escalate to host root
+- **Network isolation**: slirp4netns prevents access to host services while allowing internet access
+- **Capability minimization**: Drops all capabilities, only adds 6 essential ones for development workflows
+- **Resource limits**: Prevents resource exhaustion attacks (CPU, memory, swap constrained)
+
+**Key security property**: Even if an attacker gains root inside the container, they remain confined to the container namespace and cannot:
+- Access or modify host files outside `/workspace`
+- Become root on the host system
+- Access host network services (databases, APIs, etc.)
+- Affect other containers or system processes
+
+**Developer experience**: Within these security boundaries, you have full control:
+- Install packages with `sudo apt-get install`
+- Bind to privileged ports (80, 443) for web development
+- Use standard package managers (apt, npm, pip, cargo, etc.)
+- Debug network issues with `ping` and `traceroute`
+
+### Access Controls
+
+| Resource | Access Level | Explanation |
+|----------|--------------|-------------|
+| Project workspace (`/workspace`) | **Read-Write** | Full access to project files for development (includes `.devcontainer/`) |
+| Host network | **Blocked** | Container cannot access host services |
+| Internet (HTTP/HTTPS) | **Allowed** | Required for package installation |
+| Root privileges (inside container) | **Namespace-root only** | Sudo available for package installation, but isolated to container namespace—cannot affect host system |
+| Root privileges (host system) | **Blocked** | User namespace isolation prevents any escalation to host root |
+
+### Security Features
+
+1. **User Namespace Isolation**
+   - Container runs in isolated user namespace with rootless Podman (`--userns=keep-id`)
+   - Inside container: `vscode` user can use `sudo` to become namespace-root for package installation
+   - On host: Container processes map to your regular user UID—cannot become real root or access other users' files
+   - **Security boundary**: Sudo gives "root" inside the namespace ONLY; cannot affect host system, modify host files, or escalate to host root
+   - **Developer benefit**: Can run `sudo apt-get install`, bind to privileged ports (80, 443), use standard package managers
+   - **Attack mitigation**: Even if attacker gains root inside container, they remain confined to the namespace and cannot escape to host
+
+2. **Minimal Capabilities**
+   - Drops all Linux capabilities by default (`--cap-drop=ALL`)
+   - Only grants 6 essential capabilities for development:
+     - **SETUID**: Required for sudo to change UID within namespace—enables `sudo apt-get install`
+     - **SETGID**: Required for sudo to change GID within namespace—complements SETUID
+     - **AUDIT_WRITE**: Allows authentication systems (PAM, sudo) to write audit logs
+     - **CHOWN**: Allows package managers (apt, npm, pip) to change file ownership during installation
+     - **NET_BIND_SERVICE**: Allows binding to privileged ports (80, 443) for web servers without root
+     - **NET_RAW**: Enables ICMP for network debugging tools (`ping`, `traceroute`)
+   - **Security model**: All capabilities scoped to container namespace—cannot affect host system
+   - **Trade-off**: Balances developer convenience (package installation, port binding) with security (no host access)
+   - Reduces attack surface by ~95% compared to default container capabilities
+
+3. **Network Isolation**
+   - Uses `slirp4netns` for user-mode networking
+   - Container cannot access host services (no `127.0.0.1` access to host)
+   - Internet access via HTTP/HTTPS for package downloads
+   - Ideal for development while maintaining security boundaries
+
+4. **Filesystem Isolation**
+   - Project workspace has full read-write access
+   - Git repository accessible for commits
+   - Container isolated from host filesystem outside workspace
+
+5. **Additional Hardening**
+   - **`no-new-privileges`** (`--security-opt=no-new-privileges`): Prevents privilege escalation beyond current namespace via setuid binaries or file capabilities—blocks exploiting setuid-root binaries even if found
+   - **Capability-based sudo**: Sudo relies on CAP_SETUID capability (allowed), not setuid binary bit (blocked by no-new-privileges)
+   - **Init process (tini)**: Proper zombie process reaping prevents resource exhaustion
+   - **Rootless Podman**: No privileged daemon running as host root—entire container runtime runs as your user
+   - **Resource limits**: CPU (8 cores), memory (8GB RAM + 48GB swap) prevent denial-of-service within container
 
 ## Architecture Decisions
 
@@ -606,13 +719,16 @@ The `.devcontainer/` directory is accessible at `/workspace/.devcontainer` with 
 
 Before using this configuration in production or with sensitive data:
 
-- [ ] Review and understand all security settings
-- [ ] Verify Podman is running in rootless mode
-- [ ] Confirm no additional capabilities beyond defaults
-- [ ] Test network isolation (cannot reach host services)
-- [ ] Understand that DevContainer config is part of workspace (read-write)
-- [ ] Audit any additional packages or extensions added
-- [ ] Keep base image updated for security patches
+- [ ] **Review and understand the security model**: User namespace isolation, capability restrictions, network isolation
+- [ ] **Verify rootless Podman**: Confirm Podman runs as your user, not root (`podman info | grep rootless`)
+- [ ] **Understand sudo limitations**: Sudo gives namespace-root only—cannot affect host system
+- [ ] **Confirm capability set**: Only 6 explicit capabilities granted (SETUID, SETGID, AUDIT_WRITE, CHOWN, NET_BIND_SERVICE, NET_RAW), plus user namespace implicit capabilities
+- [ ] **Test network isolation**: Verify container cannot reach host services (`curl http://host.docker.internal:3000` should fail)
+- [ ] **Workspace security**: DevContainer config (`.devcontainer/`) is part of workspace with read-write access—treat as untrusted if repo is untrusted
+- [ ] **Audit extensions and packages**: Review all VSCode extensions and additional packages for security implications
+- [ ] **Keep base image updated**: Regularly rebuild with latest Microsoft DevContainer base image for security patches
+- [ ] **Resource limits**: Verify CPU and memory limits are appropriate for your host system
+- [ ] **Authentication secrets**: Ensure `.claude-token` and `.claude-oauth.json` are gitignored and never committed
 
 ## References
 

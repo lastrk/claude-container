@@ -3,8 +3,8 @@ set -e
 
 # Secure DevContainer Configuration Installer
 # Self-contained installer with all configuration files embedded
-# Generated from commit: 87ca6bc
-# Build date: 2025-10-17 09:30:52
+# Generated from commit: bbd8655
+# Build date: 2025-10-17 13:10:46
 
 
 # Colors for output
@@ -30,6 +30,30 @@ print_error() {
     echo -e "${RED}✗${NC} $1"
 }
 
+# Parse command line arguments
+FORCE_UPGRADE=false
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --force-upgrade)
+            FORCE_UPGRADE=true
+            shift
+            ;;
+        -h|--help)
+            echo "Usage: $0 [--force-upgrade]"
+            echo ""
+            echo "Options:"
+            echo "  --force-upgrade    Overwrite existing .devcontainer (only if under git version control)"
+            echo "  -h, --help         Show this help message"
+            exit 0
+            ;;
+        *)
+            print_error "Unknown option: $1"
+            echo "Use --help for usage information"
+            exit 1
+            ;;
+    esac
+done
+
 # Check if we're in a git repository
 if ! git rev-parse --git-dir > /dev/null 2>&1; then
     print_error "Not a git repository. Please run this script from the root of a git repository."
@@ -48,16 +72,60 @@ echo ""
 
 print_info "Repository root: ${REPO_ROOT}"
 print_info "Target directory: ${DEVCONTAINER_DIR}"
+if [ "$FORCE_UPGRADE" = true ]; then
+    print_warning "Force upgrade mode enabled"
+fi
 echo ""
 
 # Check if .devcontainer already exists
 if [ -d "${DEVCONTAINER_DIR}" ]; then
-    print_error ".devcontainer directory already exists!"
-    print_error "Please remove or rename the existing .devcontainer directory first."
+    if [ "$FORCE_UPGRADE" = false ]; then
+        print_error ".devcontainer directory already exists!"
+        print_error "Please remove or rename the existing .devcontainer directory first."
+        echo ""
+        echo "To remove: rm -rf ${DEVCONTAINER_DIR}"
+        echo "To backup: mv ${DEVCONTAINER_DIR} ${DEVCONTAINER_DIR}.backup"
+        echo ""
+        echo "Or use --force-upgrade to overwrite (requires .devcontainer to be under git version control)"
+        exit 1
+    fi
+
+    # Force upgrade mode - check if .devcontainer is under version control
+    print_warning ".devcontainer directory exists, checking git status..."
+
+    # Check if any files in .devcontainer are tracked by git
+    cd "${REPO_ROOT}"
+    TRACKED_FILES=$(git ls-files .devcontainer/ 2>/dev/null | wc -l)
+
+    if [ "$TRACKED_FILES" -eq 0 ]; then
+        print_error ".devcontainer directory is NOT under git version control!"
+        echo ""
+        print_error "Cannot use --force-upgrade on unversioned .devcontainer directory."
+        echo ""
+        echo "This is a safety measure to prevent accidental data loss."
+        echo ""
+        echo "Please choose one of these options:"
+        echo ""
+        echo "  1. Put .devcontainer under version control:"
+        echo "     ${YELLOW}git add .devcontainer/${NC}"
+        echo "     ${YELLOW}git commit -m \"Add current devcontainer configuration\"${NC}"
+        echo "     Then re-run: ${YELLOW}$0 --force-upgrade${NC}"
+        echo ""
+        echo "  2. Manually backup the directory:"
+        echo "     ${YELLOW}cp -r ${DEVCONTAINER_DIR} ${DEVCONTAINER_DIR}.backup${NC}"
+        echo "     ${YELLOW}rm -rf ${DEVCONTAINER_DIR}${NC}"
+        echo "     Then re-run: ${YELLOW}$0${NC}"
+        echo ""
+        echo "  3. Delete the directory (if you're sure):"
+        echo "     ${YELLOW}rm -rf ${DEVCONTAINER_DIR}${NC}"
+        echo "     Then re-run: ${YELLOW}$0${NC}"
+        echo ""
+        exit 1
+    fi
+
+    print_success ".devcontainer is under version control (${TRACKED_FILES} tracked files)"
+    print_warning "Proceeding with upgrade - existing files will be overwritten"
     echo ""
-    echo "To remove: rm -rf ${DEVCONTAINER_DIR}"
-    echo "To backup: mv ${DEVCONTAINER_DIR} ${DEVCONTAINER_DIR}.backup"
-    exit 1
 fi
 
 # Display what will be installed
@@ -561,6 +629,211 @@ RUN apt-get update && apt-get install -y \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
+# pkgx Installation (User-space Package Manager)
+# Purpose: Allow developers to install additional tools without sudo
+# Why pkgx: Pure user-space (no root required), fast, intuitive commands, 10K+ packages
+# Why useful: Install ad-hoc tools (ripgrep, jq, specific Java versions) on-demand
+# Security: No privilege escalation, confined to ~/.pkgx directory
+# Alternative to: apt-get (requires sudo), Nix (requires /nix directory setup)
+# Installation: Runs as vscode user, installs to ~/.local/bin/pkgx
+# Shell integration: Adds eval hook to .bashrc for package activation
+RUN su vscode -c 'curl -fsSL https://pkgx.sh | sh' && \
+    echo 'eval "$(pkgx --shellcode)"' >> /home/vscode/.bashrc
+
+# ==============================================================================
+# OPTIONAL DEVELOPMENT ENVIRONMENTS (Commented Out)
+# ==============================================================================
+# Uncomment the blocks below to install specific language toolchains.
+# Each block is independent and can be enabled separately.
+# After uncommenting, rebuild the container: F1 → "Dev Containers: Rebuild Container"
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# Java Development Environment
+# ------------------------------------------------------------------------------
+# Purpose: Install multiple JDK versions, Maven, and Gradle
+# Package sources:
+#   - OpenJDK 11, 17, 21: Ubuntu 22.04 default repositories
+#   - OpenJDK 24: Requires adding Oracle or Adoptium repository (see notes)
+# Multi-architecture support: Works on both AMD64 and ARM64
+# Note: Use 'update-java-alternatives' to switch between Java versions
+# Note: Consider using pkgx for Java (pkgx install openjdk.org@17) as an alternative
+# ------------------------------------------------------------------------------
+# RUN apt-get update && apt-get install -y \
+#     # OpenJDK 11 (LTS, wide enterprise adoption)
+#     # Available on both AMD64 and ARM64
+#     openjdk-11-jdk \
+#     # OpenJDK 17 (LTS, current recommended version)
+#     # Available on both AMD64 and ARM64
+#     openjdk-17-jdk \
+#     # OpenJDK 21 (LTS, latest stable LTS release)
+#     # Available on both AMD64 and ARM64
+#     openjdk-21-jdk \
+#     # OpenJDK 24 (Early Access - Not available in Ubuntu 22.04 repos)
+#     # To install Java 24, add Adoptium repository:
+#     # wget -qO - https://packages.adoptium.net/artifactory/api/gpg/key/public | apt-key add -
+#     # echo "deb https://packages.adoptium.net/artifactory/deb $(lsb_release -sc) main" > /etc/apt/sources.list.d/adoptium.list
+#     # apt-get update && apt-get install -y temurin-24-jdk
+#     # Maven (latest from Ubuntu repos, typically 3.6.x or 3.8.x)
+#     maven \
+#     # Gradle (version from Ubuntu repos, may not be latest)
+#     # For latest Gradle, use: pkgx install gradle.org
+#     gradle \
+#     # Fix ca-certificates-java setup (workaround for cacerts directory issue)
+#     # The ca-certificates-java postinst script sometimes fails on first run
+#     # This ensures the Java certificate store is properly initialized
+#     && /var/lib/dpkg/info/ca-certificates-java.postinst configure \
+#     && apt-get clean \
+#     && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+#
+# # Configure default Java version (multi-architecture compatible)
+# # Option 1: Use update-java-alternatives (recommended, handles all Java components)
+# # RUN update-java-alternatives --set java-1.17.0-openjdk-$(dpkg --print-architecture)
+# #
+# # Option 2: Use update-alternatives for just the java binary
+# # RUN update-alternatives --set java /usr/lib/jvm/java-17-openjdk-$(dpkg --print-architecture)/bin/java
+# #
+# # Option 3: Let update-alternatives choose automatically (uses highest version)
+# # No action needed - already set during installation
+#
+# # Verify installation
+# # RUN java -version && mvn -version && gradle -version
+
+# ------------------------------------------------------------------------------
+# Rust Development Environment
+# ------------------------------------------------------------------------------
+# Purpose: Install Rust toolchain with cargo and version management via rustup
+# Why rustup: Official Rust toolchain installer, allows switching between versions
+# Components: rustc (compiler), cargo (package manager), rustup (version manager)
+# Installation: Runs as vscode user (non-root installation)
+# Rust versions: stable, beta, nightly, or specific versions (e.g., 1.70.0)
+# Switching versions: rustup default stable|beta|nightly|1.70.0
+# ------------------------------------------------------------------------------
+# RUN su vscode -c 'curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y' && \
+#     echo 'source $HOME/.cargo/env' >> /home/vscode/.bashrc
+#
+# # Install additional Rust components (optional)
+# # RUN su vscode -c 'rustup component add rustfmt clippy rust-analyzer'
+#
+# # Install additional toolchains (optional)
+# # RUN su vscode -c 'rustup toolchain install nightly beta'
+#
+# # Verify installation
+# # RUN su vscode -c 'rustc --version && cargo --version && rustup --version'
+
+# ------------------------------------------------------------------------------
+# C++ Development Environment (LLVM/Clang)
+# ------------------------------------------------------------------------------
+# Purpose: Install recent LLVM/Clang compiler toolchain
+# Why LLVM: Modern C++ compiler with excellent diagnostics and tooling
+# Version: LLVM 18 (latest stable as of 2024)
+# Components: clang, clang++, lldb (debugger), lld (linker), clang-format, clang-tidy
+# Alternative: Use system GCC (already installed via build-essential)
+# Note: build-essential (GCC/G++) is already installed in base configuration
+# ------------------------------------------------------------------------------
+# RUN wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc && \
+#     echo "deb http://apt.llvm.org/jammy/ llvm-toolchain-jammy-18 main" > /etc/apt/sources.list.d/llvm.list && \
+#     apt-get update && apt-get install -y \
+#     # LLVM 18 core package
+#     llvm-18 \
+#     # Clang C/C++ compiler
+#     clang-18 \
+#     # Clang C++ standard library
+#     libc++-18-dev \
+#     libc++abi-18-dev \
+#     # LLDB debugger
+#     lldb-18 \
+#     # LLD linker (faster than GNU ld)
+#     lld-18 \
+#     # Clang code formatting tool
+#     clang-format-18 \
+#     # Clang static analyzer
+#     clang-tidy-18 \
+#     && apt-get clean \
+#     && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+#
+# # Set LLVM 18 as default (optional)
+# # RUN update-alternatives --install /usr/bin/clang clang /usr/bin/clang-18 100 && \
+# #     update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-18 100
+#
+# # Verify installation
+# # RUN clang-18 --version && lldb-18 --version
+
+# ------------------------------------------------------------------------------
+# Python Development Environment
+# ------------------------------------------------------------------------------
+# Purpose: Enhanced Python development with conda, virtualenv, and tools
+# Note: python3 and pip are already installed in base configuration
+# Conda: Anaconda distribution with package and environment management
+# Why conda: Better for data science, manages non-Python dependencies (CUDA, etc.)
+# Miniconda vs Anaconda: Miniconda is minimal, Anaconda includes 250+ packages
+# Note: Conda installation is large (~500MB-3GB), consider using pkgx or venv instead
+# ------------------------------------------------------------------------------
+# RUN apt-get update && apt-get install -y \
+#     # Python virtual environment (already installed in base, shown for reference)
+#     # python3-venv \
+#     # Python development headers (for compiling C extensions)
+#     python3-dev \
+#     # pip wheel support
+#     python3-wheel \
+#     # setuptools for package installation
+#     python3-setuptools \
+#     && apt-get clean \
+#     && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+#
+# # Install Miniconda (conda package manager)
+# # Uncomment below to install Miniconda as vscode user
+# # RUN su vscode -c 'wget -q https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O /tmp/miniconda.sh && \
+# #     bash /tmp/miniconda.sh -b -p $HOME/miniconda3 && \
+# #     rm /tmp/miniconda.sh' && \
+# #     echo 'export PATH="$HOME/miniconda3/bin:$PATH"' >> /home/vscode/.bashrc && \
+# #     echo 'eval "$(conda shell.bash hook)"' >> /home/vscode/.bashrc
+#
+# # Initialize conda (optional, requires Miniconda to be installed above)
+# # RUN su vscode -c '$HOME/miniconda3/bin/conda init bash'
+#
+# # Install common Python development tools via pip (optional)
+# # RUN su vscode -c 'pip3 install --user \
+# #     virtualenv \
+# #     pipenv \
+# #     poetry \
+# #     black \
+# #     flake8 \
+# #     pylint \
+# #     mypy \
+# #     pytest'
+#
+# # Verify installation
+# # RUN python3 --version && pip3 --version
+# # RUN su vscode -c 'conda --version'  # If conda installed
+
+# ------------------------------------------------------------------------------
+# Clojure Development Environment
+# ------------------------------------------------------------------------------
+# Purpose: Install Clojure CLI tools (clj and clojure commands)
+# Official guide: https://clojure.org/guides/install_clojure#_linux_instructions
+# Dependencies: bash, curl, rlwrap (for REPL readline support), Java (OpenJDK)
+# Installation: Downloads and runs official installer script from Clojure GitHub
+# Components: clj (wrapper with rlwrap), clojure (direct java command)
+# Install location: /usr/local/bin/clj, /usr/local/bin/clojure, /usr/local/lib/clojure
+# Note: Requires Java to be installed (use Java block above or pkgx install openjdk.org@17)
+# ------------------------------------------------------------------------------
+# RUN apt-get update && apt-get install -y \
+#     # rlwrap: Readline wrapper for REPL (provides command history, editing)
+#     rlwrap \
+#     && apt-get clean \
+#     && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+#
+# # Download and install Clojure CLI tools
+# # Note: Installs to /usr/local/bin by default, accessible system-wide
+# RUN curl -L -O https://github.com/clojure/brew-install/releases/latest/download/linux-install.sh && \
+#     chmod +x linux-install.sh && \
+#     ./linux-install.sh && \
+#     rm linux-install.sh
+#
+# # Verify installation
+# # RUN clojure --version
+
 # NPM Global Directory Configuration (Non-root User)
 # Purpose: Configure npm to install global packages in user's home directory
 # Why necessary: Default npm global path (/usr/local) requires root privileges
@@ -587,14 +860,22 @@ ENV PATH="/home/vscode/.npm-global/bin:${PATH}"
 RUN git config --system --add safe.directory /workspace
 
 # VS Code Server Directory
-# Purpose: Pre-create directory for VS Code Server installation
-# Why necessary: VS Code tries to install server at /vscode/vscode-server
-# mkdir -p: Creates /vscode directory (and parents if needed)
+# Purpose: Pre-create directories for VS Code Server installation
+# Why necessary: VS Code installs server components to multiple locations
+# Locations:
+#   - /vscode/vscode-server/extensionsCache: Shared extensions cache
+#   - /home/vscode/.vscode-server: Per-user server data
+#   - /home/vscode/.vscode-server/extensionsCache: Per-user extensions cache
+# mkdir -p: Creates directories (and parents if needed)
 # chown: Changes ownership to vscode user and group
 # Security: vscode user can write here without sudo, no volume mount needed
-# Note: With --userns=keep-id, this directory needs to be created/fixed at runtime
-# Trade-off: VS Code Server reinstalled on each container rebuild (acceptable)
-RUN mkdir -p /vscode && chmod 777 /vscode
+# Note: With --userns=keep-id, permissions work correctly with host user mapping
+# Why both caches: VSCode syncs extensions between user cache and shared cache
+RUN mkdir -p /vscode/vscode-server/extensionsCache \
+             /home/vscode/.vscode-server/extensionsCache && \
+    chown -R vscode:vscode /home/vscode/.vscode-server && \
+    chmod -R 755 /home/vscode/.vscode-server && \
+    chmod -R 777 /vscode
 
 # Working Directory: Set default directory for RUN/CMD/ENTRYPOINT
 # Purpose: All commands will execute from /workspace by default
@@ -705,7 +986,7 @@ The project uses a **two-stage distribution model**:
    - Produces self-contained `install.sh`
 
 3. **install.sh** (generated artifact):
-   - Single distributable file (~44KB)
+   - Single distributable file (~60KB)
    - Contains all configuration files embedded
    - Can be run in any Git repository
    - Extracts files to `.devcontainer/` directory
@@ -742,18 +1023,44 @@ Result: Claude Code authenticated without manual login
 
 ### Security Architecture
 
-Defense-in-depth container hardening via `runArgs` in devcontainer.json:
+Defense-in-depth container hardening via `runArgs` in devcontainer.json. This configuration balances developer productivity with strong isolation.
 
-1. **Capability Model**: Drop ALL, add only essential capabilities:
-   - SETUID/SETGID (user switching, sudo)
-   - AUDIT_WRITE (authentication logging)
-   - CHOWN (package manager file ownership)
-   - NET_BIND_SERVICE (bind to ports 80/443)
-   - NET_RAW (ping/traceroute for debugging)
-2. **Network Isolation**: slirp4netns (user-mode, blocks host services)
-3. **Privilege Escalation**: `--security-opt=no-new-privileges`
-4. **User Namespace**: `--userns=keep-id` (Podman rootless UID mapping)
-5. **Resource Limits**: `--cpus=8`, `--memory=8g`, `--memory-swap=56g` (48GB swap, configurable)
+**Security model**: Multi-layered isolation where even gaining root inside the container cannot affect the host system.
+
+1. **User Namespace Isolation** (`--userns=keep-id`):
+   - Container runs in isolated user namespace with rootless Podman
+   - Inside container: `vscode` user can use `sudo` to become namespace-root for package installation
+   - On host: Container processes map to regular user UID—cannot become real root or access other users' files
+   - **Critical property**: Sudo gives "root" inside namespace ONLY; cannot affect host system, modify host files outside workspace, or escalate to host root
+
+2. **Capability Minimization** (`--cap-drop=ALL` then selective add):
+   - Drops all Linux capabilities by default (removes ~30+ dangerous capabilities)
+   - Only grants 6 essential capabilities for development:
+     - **SETUID**: Required for sudo to change UID within namespace
+     - **SETGID**: Required for sudo to change GID within namespace
+     - **AUDIT_WRITE**: Allows authentication systems (PAM, sudo) to write audit logs
+     - **CHOWN**: Allows package managers (apt, npm, pip) to change file ownership
+     - **NET_BIND_SERVICE**: Allows binding to privileged ports (80, 443) without root
+     - **NET_RAW**: Enables ICMP for network debugging (`ping`, `traceroute`)
+   - All capabilities scoped to container namespace—cannot affect host system
+   - Reduces attack surface by ~95% compared to default container
+
+3. **Network Isolation** (`--network=slirp4netns`):
+   - User-mode networking (no root privileges required)
+   - Container cannot access host services (127.0.0.1 on host is unreachable)
+   - Internet access via HTTP/HTTPS for package downloads
+   - Prevents lateral movement to host services
+
+4. **Privilege Escalation Prevention** (`--security-opt=no-new-privileges`):
+   - Prevents privilege escalation via setuid binaries or file capabilities
+   - Blocks exploiting setuid-root binaries even if found
+   - Sudo relies on CAP_SETUID capability (allowed), not setuid binary bit (blocked)
+
+5. **Resource Limits**:
+   - CPU: `--cpus=8` (prevents CPU exhaustion)
+   - Memory: `--memory=8g` (prevents memory exhaustion)
+   - Swap: `--memory-swap=56g` (8GB RAM + 48GB swap, prevents OOM kills)
+   - Not preallocated: Swap only uses disk when RAM is full
 
 ### File Ownership Model
 
@@ -777,7 +1084,7 @@ When `build.sh` runs, it reads files from project root and embeds them in `insta
 - Reads all source files from project root
 - Generates git commit hash and build date
 - Creates heredocs for each file with EOF delimiters
-- Produces self-contained install.sh (~44KB)
+- Produces self-contained install.sh (~60KB)
 - Makes installer executable (chmod +x)
 
 **Files embedded** (defined in build.sh:31-36):
@@ -882,6 +1189,83 @@ Edit `devcontainer.json` runArgs array:
 - Swap is not preallocated: Only uses disk when RAM is full
 
 Then rebuild: `./build.sh`
+
+## Dockerfile Architecture
+
+### Base Image
+
+Uses Microsoft's official DevContainer base image (`mcr.microsoft.com/devcontainers/base:ubuntu-22.04`):
+- Pre-configured non-root `vscode` user (UID 1000)
+- Common dev tools pre-installed (git, curl, wget, build-essential)
+- Ubuntu 22.04 LTS (support until 2027)
+
+### Installed Tools and Environment Setup
+
+**Core tools** (always installed):
+- Build tools: build-essential, cmake, ninja-build, pkg-config
+- Python: python3, pip, venv
+- Node.js: Latest LTS via NodeSource repository
+- pkgx: User-space package manager for ad-hoc tool installation
+- Git: Pre-configured with safe.directory for /workspace
+
+**Optional development environments** (commented out, uncomment to enable):
+- **Java**: OpenJDK 11, 17, 21 + Maven + Gradle (multi-architecture: AMD64/ARM64)
+- **Rust**: rustup with cargo (stable/beta/nightly versions)
+- **C++**: LLVM 18 with Clang, LLDB, LLD
+- **Python**: Enhanced with conda, virtualenv, dev tools
+- **Clojure**: Official Clojure CLI tools
+
+### Multi-Architecture Support
+
+The Dockerfile uses `$(dpkg --print-architecture)` for automatic architecture detection:
+- Works on both AMD64 (Intel) and ARM64 (Apple Silicon)
+- Java version selection commands use architecture-aware paths
+- Example: `/usr/lib/jvm/java-17-openjdk-$(dpkg --print-architecture)/bin/java`
+
+**Java architecture notes**:
+- OpenJDK 11, 17, 21: Available on both AMD64 and ARM64
+- OpenJDK 8: Removed from default configuration (legacy, AMD64-only)
+- Use pkgx for other Java versions: `pkgx install openjdk.org@17`
+
+### VSCode Server Directory Structure
+
+VSCode DevContainers requires specific directory structure (created in Dockerfile):
+
+```
+/vscode/
+└── vscode-server/
+    └── extensionsCache/        # Shared extensions cache (777 permissions)
+
+/home/vscode/
+└── .vscode-server/
+    └── extensionsCache/        # Per-user extensions cache (755 permissions)
+```
+
+**Why both locations**:
+- `/vscode`: Can be volume-mounted to share server binaries across multiple containers
+- `/home/vscode/.vscode-server`: Per-user data, isolated to this container
+- VSCode syncs extensions between both caches during startup
+
+**Critical implementation** (Dockerfile lines 320-336):
+```dockerfile
+RUN mkdir -p /vscode/vscode-server/extensionsCache \
+             /home/vscode/.vscode-server/extensionsCache && \
+    chown -R vscode:vscode /home/vscode/.vscode-server && \
+    chmod -R 755 /home/vscode/.vscode-server && \
+    chmod -R 777 /vscode
+```
+
+**Why this matters**: If `extensionsCache` subdirectories don't exist, VSCode startup fails with "can't cd to /home/vscode/.vscode-server/extensionsCache" error.
+
+### Java Certificate Store Fix
+
+Java installations include a fix for ca-certificates-java setup issues:
+
+```dockerfile
+&& /var/lib/dpkg/info/ca-certificates-java.postinst configure
+```
+
+This ensures the Java certificate store is properly initialized, preventing "No such file or directory" errors for `/etc/ssl/certs/java/cacerts` during OpenJDK installation.
 
 ## Key Implementation Details
 

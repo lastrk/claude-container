@@ -115,6 +115,30 @@ print_error() {
     echo -e "${RED}✗${NC} $1"
 }
 
+# Parse command line arguments
+FORCE_UPGRADE=false
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --force-upgrade)
+            FORCE_UPGRADE=true
+            shift
+            ;;
+        -h|--help)
+            echo "Usage: $0 [--force-upgrade]"
+            echo ""
+            echo "Options:"
+            echo "  --force-upgrade    Overwrite existing .devcontainer (only if under git version control)"
+            echo "  -h, --help         Show this help message"
+            exit 0
+            ;;
+        *)
+            print_error "Unknown option: $1"
+            echo "Use --help for usage information"
+            exit 1
+            ;;
+    esac
+done
+
 # Check if we're in a git repository
 if ! git rev-parse --git-dir > /dev/null 2>&1; then
     print_error "Not a git repository. Please run this script from the root of a git repository."
@@ -133,16 +157,60 @@ echo ""
 
 print_info "Repository root: ${REPO_ROOT}"
 print_info "Target directory: ${DEVCONTAINER_DIR}"
+if [ "$FORCE_UPGRADE" = true ]; then
+    print_warning "Force upgrade mode enabled"
+fi
 echo ""
 
 # Check if .devcontainer already exists
 if [ -d "${DEVCONTAINER_DIR}" ]; then
-    print_error ".devcontainer directory already exists!"
-    print_error "Please remove or rename the existing .devcontainer directory first."
+    if [ "$FORCE_UPGRADE" = false ]; then
+        print_error ".devcontainer directory already exists!"
+        print_error "Please remove or rename the existing .devcontainer directory first."
+        echo ""
+        echo "To remove: rm -rf ${DEVCONTAINER_DIR}"
+        echo "To backup: mv ${DEVCONTAINER_DIR} ${DEVCONTAINER_DIR}.backup"
+        echo ""
+        echo "Or use --force-upgrade to overwrite (requires .devcontainer to be under git version control)"
+        exit 1
+    fi
+
+    # Force upgrade mode - check if .devcontainer is under version control
+    print_warning ".devcontainer directory exists, checking git status..."
+
+    # Check if any files in .devcontainer are tracked by git
+    cd "${REPO_ROOT}"
+    TRACKED_FILES=$(git ls-files .devcontainer/ 2>/dev/null | wc -l)
+
+    if [ "$TRACKED_FILES" -eq 0 ]; then
+        print_error ".devcontainer directory is NOT under git version control!"
+        echo ""
+        print_error "Cannot use --force-upgrade on unversioned .devcontainer directory."
+        echo ""
+        echo "This is a safety measure to prevent accidental data loss."
+        echo ""
+        echo "Please choose one of these options:"
+        echo ""
+        echo "  1. Put .devcontainer under version control:"
+        echo "     ${YELLOW}git add .devcontainer/${NC}"
+        echo "     ${YELLOW}git commit -m \"Add current devcontainer configuration\"${NC}"
+        echo "     Then re-run: ${YELLOW}$0 --force-upgrade${NC}"
+        echo ""
+        echo "  2. Manually backup the directory:"
+        echo "     ${YELLOW}cp -r ${DEVCONTAINER_DIR} ${DEVCONTAINER_DIR}.backup${NC}"
+        echo "     ${YELLOW}rm -rf ${DEVCONTAINER_DIR}${NC}"
+        echo "     Then re-run: ${YELLOW}$0${NC}"
+        echo ""
+        echo "  3. Delete the directory (if you're sure):"
+        echo "     ${YELLOW}rm -rf ${DEVCONTAINER_DIR}${NC}"
+        echo "     Then re-run: ${YELLOW}$0${NC}"
+        echo ""
+        exit 1
+    fi
+
+    print_success ".devcontainer is under version control (${TRACKED_FILES} tracked files)"
+    print_warning "Proceeding with upgrade - existing files will be overwritten"
     echo ""
-    echo "To remove: rm -rf ${DEVCONTAINER_DIR}"
-    echo "To backup: mv ${DEVCONTAINER_DIR} ${DEVCONTAINER_DIR}.backup"
-    exit 1
 fi
 
 # Display what will be installed

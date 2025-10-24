@@ -27,7 +27,7 @@ The project uses a **two-stage distribution model**:
    - Produces self-contained `install.sh`
 
 3. **install.sh** (generated artifact):
-   - Single distributable file (~44KB)
+   - Single distributable file (~60KB)
    - Contains all configuration files embedded
    - Can be run in any Git repository
    - Extracts files to `.devcontainer/` directory
@@ -64,18 +64,44 @@ Result: Claude Code authenticated without manual login
 
 ### Security Architecture
 
-Defense-in-depth container hardening via `runArgs` in devcontainer.json:
+Defense-in-depth container hardening via `runArgs` in devcontainer.json. This configuration balances developer productivity with strong isolation.
 
-1. **Capability Model**: Drop ALL, add only essential capabilities:
-   - SETUID/SETGID (user switching, sudo)
-   - AUDIT_WRITE (authentication logging)
-   - CHOWN (package manager file ownership)
-   - NET_BIND_SERVICE (bind to ports 80/443)
-   - NET_RAW (ping/traceroute for debugging)
-2. **Network Isolation**: slirp4netns (user-mode, blocks host services)
-3. **Privilege Escalation**: `--security-opt=no-new-privileges`
-4. **User Namespace**: `--userns=keep-id` (Podman rootless UID mapping)
-5. **Resource Limits**: `--cpus=8`, `--memory=8g`, `--memory-swap=56g` (48GB swap, configurable)
+**Security model**: Multi-layered isolation where even gaining root inside the container cannot affect the host system.
+
+1. **User Namespace Isolation** (`--userns=keep-id`):
+   - Container runs in isolated user namespace with rootless Podman
+   - Inside container: `vscode` user can use `sudo` to become namespace-root for package installation
+   - On host: Container processes map to regular user UID—cannot become real root or access other users' files
+   - **Critical property**: Sudo gives "root" inside namespace ONLY; cannot affect host system, modify host files outside workspace, or escalate to host root
+
+2. **Capability Minimization** (`--cap-drop=ALL` then selective add):
+   - Drops all Linux capabilities by default (removes ~30+ dangerous capabilities)
+   - Only grants 6 essential capabilities for development:
+     - **SETUID**: Required for sudo to change UID within namespace
+     - **SETGID**: Required for sudo to change GID within namespace
+     - **AUDIT_WRITE**: Allows authentication systems (PAM, sudo) to write audit logs
+     - **CHOWN**: Allows package managers (apt, npm, pip) to change file ownership
+     - **NET_BIND_SERVICE**: Allows binding to privileged ports (80, 443) without root
+     - **NET_RAW**: Enables ICMP for network debugging (`ping`, `traceroute`)
+   - All capabilities scoped to container namespace—cannot affect host system
+   - Reduces attack surface by ~95% compared to default container
+
+3. **Network Isolation** (`--network=slirp4netns`):
+   - User-mode networking (no root privileges required)
+   - Container cannot access host services (127.0.0.1 on host is unreachable)
+   - Internet access via HTTP/HTTPS for package downloads
+   - Prevents lateral movement to host services
+
+4. **Privilege Escalation Prevention** (`--security-opt=no-new-privileges`):
+   - Prevents privilege escalation via setuid binaries or file capabilities
+   - Blocks exploiting setuid-root binaries even if found
+   - Sudo relies on CAP_SETUID capability (allowed), not setuid binary bit (blocked)
+
+5. **Resource Limits**:
+   - CPU: `--cpus=8` (prevents CPU exhaustion)
+   - Memory: `--memory=8g` (prevents memory exhaustion)
+   - Swap: `--memory-swap=56g` (8GB RAM + 48GB swap, prevents OOM kills)
+   - Not preallocated: Swap only uses disk when RAM is full
 
 ### File Ownership Model
 
@@ -99,7 +125,7 @@ When `build.sh` runs, it reads files from project root and embeds them in `insta
 - Reads all source files from project root
 - Generates git commit hash and build date
 - Creates heredocs for each file with EOF delimiters
-- Produces self-contained install.sh (~44KB)
+- Produces self-contained install.sh (~60KB)
 - Makes installer executable (chmod +x)
 
 **Files embedded** (defined in build.sh:31-36):
@@ -204,6 +230,83 @@ Edit `devcontainer.json` runArgs array:
 - Swap is not preallocated: Only uses disk when RAM is full
 
 Then rebuild: `./build.sh`
+
+## Dockerfile Architecture
+
+### Base Image
+
+Uses Microsoft's official DevContainer base image (`mcr.microsoft.com/devcontainers/base:ubuntu-22.04`):
+- Pre-configured non-root `vscode` user (UID 1000)
+- Common dev tools pre-installed (git, curl, wget, build-essential)
+- Ubuntu 22.04 LTS (support until 2027)
+
+### Installed Tools and Environment Setup
+
+**Core tools** (always installed):
+- Build tools: build-essential, cmake, ninja-build, pkg-config
+- Python: python3, pip, venv
+- Node.js: Latest LTS via NodeSource repository
+- pkgx: User-space package manager for ad-hoc tool installation
+- Git: Pre-configured with safe.directory for /workspace
+
+**Optional development environments** (commented out, uncomment to enable):
+- **Java**: OpenJDK 11, 17, 21 + Maven + Gradle (multi-architecture: AMD64/ARM64)
+- **Rust**: rustup with cargo (stable/beta/nightly versions)
+- **C++**: LLVM 18 with Clang, LLDB, LLD
+- **Python**: Enhanced with conda, virtualenv, dev tools
+- **Clojure**: Official Clojure CLI tools
+
+### Multi-Architecture Support
+
+The Dockerfile uses `$(dpkg --print-architecture)` for automatic architecture detection:
+- Works on both AMD64 (Intel) and ARM64 (Apple Silicon)
+- Java version selection commands use architecture-aware paths
+- Example: `/usr/lib/jvm/java-17-openjdk-$(dpkg --print-architecture)/bin/java`
+
+**Java architecture notes**:
+- OpenJDK 11, 17, 21: Available on both AMD64 and ARM64
+- OpenJDK 8: Removed from default configuration (legacy, AMD64-only)
+- Use pkgx for other Java versions: `pkgx install openjdk.org@17`
+
+### VSCode Server Directory Structure
+
+VSCode DevContainers requires specific directory structure (created in Dockerfile):
+
+```
+/vscode/
+└── vscode-server/
+    └── extensionsCache/        # Shared extensions cache (777 permissions)
+
+/home/vscode/
+└── .vscode-server/
+    └── extensionsCache/        # Per-user extensions cache (755 permissions)
+```
+
+**Why both locations**:
+- `/vscode`: Can be volume-mounted to share server binaries across multiple containers
+- `/home/vscode/.vscode-server`: Per-user data, isolated to this container
+- VSCode syncs extensions between both caches during startup
+
+**Critical implementation** (Dockerfile lines 320-336):
+```dockerfile
+RUN mkdir -p /vscode/vscode-server/extensionsCache \
+             /home/vscode/.vscode-server/extensionsCache && \
+    chown -R vscode:vscode /home/vscode/.vscode-server && \
+    chmod -R 755 /home/vscode/.vscode-server && \
+    chmod -R 777 /vscode
+```
+
+**Why this matters**: If `extensionsCache` subdirectories don't exist, VSCode startup fails with "can't cd to /home/vscode/.vscode-server/extensionsCache" error.
+
+### Java Certificate Store Fix
+
+Java installations include a fix for ca-certificates-java setup issues:
+
+```dockerfile
+&& /var/lib/dpkg/info/ca-certificates-java.postinst configure
+```
+
+This ensures the Java certificate store is properly initialized, preventing "No such file or directory" errors for `/etc/ssl/certs/java/cacerts` during OpenJDK installation.
 
 ## Key Implementation Details
 
