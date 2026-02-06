@@ -34,33 +34,42 @@ The project uses a **two-stage distribution model**:
 
 ### Authentication Flow Architecture
 
-Multi-layered authentication system for Claude Code:
+Simple environment variable authentication using `ANTHROPIC_AUTH_TOKEN`:
 
 ```
-Host System (macOS)
+Host System
   ↓ initializeCommand (runs before container creation)
-  ├─→ Extract API key from macOS keychain
-  │   └─→ Write to .devcontainer/.claude-token (gitignored)
-  └─→ Extract OAuth config from ~/.claude.json
-      └─→ Write to .devcontainer/.claude-oauth.json (gitignored)
+  └─→ Capture ANTHROPIC_* environment variables from host
+      ├─→ ANTHROPIC_AUTH_TOKEN → .devcontainer/.claude-auth-token (required)
+      ├─→ ANTHROPIC_BASE_URL → .devcontainer/.claude-base-url (optional)
+      └─→ ANTHROPIC_CUSTOM_HEADERS → .devcontainer/.claude-custom-headers (optional)
 
 Container Creation
   ↓ postCreateCommand (runs inside container after creation)
   ├─→ Install Claude Code via npm
   └─→ Run generate-claude-config.sh
-      ├─→ Read .claude-token and .claude-oauth.json
-      ├─→ Generate ~/.claude.json (OAuth + API key)
-      └─→ Generate ~/.claude/settings.json (ANTHROPIC_API_KEY env var)
+      ├─→ Read credential files from .devcontainer/
+      ├─→ Generate ~/.claude.json (minimal config)
+      └─→ Generate ~/.claude/settings.json with env vars:
+          ├─→ ANTHROPIC_AUTH_TOKEN (required)
+          ├─→ ANTHROPIC_BASE_URL (if set)
+          └─→ ANTHROPIC_CUSTOM_HEADERS (if set)
 
 Result: Claude Code authenticated without manual login
 ```
 
+**Required environment variable**:
+- `ANTHROPIC_AUTH_TOKEN` - Must be set in host environment before starting container
+
+**Optional environment variables** (captured from host if set):
+- `ANTHROPIC_BASE_URL` - Custom API endpoint
+- `ANTHROPIC_CUSTOM_HEADERS` - Additional HTTP headers for API requests
+
 **Critical implementation details**:
 - `initializeCommand` runs on HOST before container exists
 - `postCreateCommand` runs INSIDE container after it's created
-- Two authentication methods for compatibility (OAuth + env var)
-- Token files are gitignored and never committed
-- `tr -d '\n'` strips trailing newline from keychain token (required)
+- All credential files are gitignored and never committed
+- Container will fail to configure if `ANTHROPIC_AUTH_TOKEN` is not set
 
 ### Security Architecture
 
@@ -151,7 +160,7 @@ bash /path/to/claude-container/install.sh
 - Creates .devcontainer/ directory
 - Extracts all embedded files
 - Makes generate-claude-config.sh executable
-- Adds .claude-token and .claude-oauth.json to .gitignore
+- Adds credential files to .gitignore
 
 ### Run Claude Code in Unsupervised Mode
 
@@ -321,8 +330,8 @@ The build system uses heredocs instead of base64 encoding or downloading files b
 ### Dynamic Configuration Generation
 
 Authentication configuration is generated dynamically by `generate-claude-config.sh` using `jq -n`:
-1. `~/.claude/settings.json` with `env.ANTHROPIC_API_KEY` (primary)
-2. `~/.claude.json` generated with OAuth account info and token suffix
+1. `~/.claude/settings.json` with `env.ANTHROPIC_AUTH_TOKEN`
+2. `~/.claude.json` with minimal config (onboarding complete, token suffix)
 
 No template file is needed - the script creates the JSON structure directly using jq.
 
@@ -445,13 +454,13 @@ free -h  # Should show ~8GB (if VM has 16GB)
 
 ## Platform Compatibility Notes
 
-### macOS-specific Features
+### Cross-Platform Authentication
 
-The `initializeCommand` in devcontainer.json uses macOS-specific commands:
-- `security find-generic-password` - Extracts from keychain
-- `tr -d '\n'` - Removes trailing newline from keychain output
+The `initializeCommand` uses standard shell commands that work on macOS, Linux, and Windows (WSL):
+- Environment variables are captured using `printf` and shell conditionals
+- No platform-specific commands are used
 
-**For Linux/Windows**: Users must modify initializeCommand or authenticate interactively inside container.
+**Requirement**: Set `ANTHROPIC_AUTH_TOKEN` in your environment before starting the container.
 
 ### Podman vs Docker
 

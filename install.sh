@@ -3,8 +3,8 @@ set -e
 
 # Secure DevContainer Configuration Installer
 # Self-contained installer with all configuration files embedded
-# Generated from commit: 69ddd32
-# Build date: 2025-10-24 15:35:25
+# Generated from commit: 3216461
+# Build date: 2025-10-24 15:36:21
 
 
 # Colors for output
@@ -146,7 +146,7 @@ echo "  • Rootless Podman-compatible container"
 echo "  • Minimal Linux capabilities (security hardened)"
 echo "  • Network isolation (slirp4netns)"
 echo "  • Automatic Claude Code installation"
-echo "  • OAuth + API key authentication support"
+echo "  • Environment variable authentication (ANTHROPIC_AUTH_TOKEN)"
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
@@ -454,7 +454,7 @@ cat > "${DEVCONTAINER_DIR}/devcontainer.json" << 'EOF_devcontainer_json'
 	// Why .claude.json: Creates OAuth account config for organization support
 	// Why git --version: Verifies git works (tests safe.directory config)
 	// &&: Chain commands - each must succeed for next to run
-	"postCreateCommand": "mkdir -p /vscode ~/.claude && npm install -g @anthropic-ai/claude-code && if [ -f /workspace/.devcontainer/.claude-token ]; then TOKEN=$(cat /workspace/.devcontainer/.claude-token) && echo \"{\\\"env\\\": {\\\"ANTHROPIC_API_KEY\\\": \\\"$TOKEN\\\"}}\" > ~/.claude/settings.json && chmod 600 ~/.claude/settings.json; fi && if [ -f /workspace/.devcontainer/generate-claude-config.sh ]; then /workspace/.devcontainer/generate-claude-config.sh; fi && echo 'DevContainer created successfully! Claude Code installed.' && git --version",
+	"postCreateCommand": "mkdir -p /vscode ~/.claude && npm install -g @anthropic-ai/claude-code && if [ -f /workspace/.devcontainer/generate-claude-config.sh ]; then /workspace/.devcontainer/generate-claude-config.sh; fi && echo 'DevContainer created successfully! Claude Code installed.' && git --version",
 
 	// Forward Ports: Automatically forward ports from container to host
 	// Purpose: Makes services running in container accessible from host browser/tools
@@ -486,13 +486,12 @@ cat > "${DEVCONTAINER_DIR}/devcontainer.json" << 'EOF_devcontainer_json'
 	// Format: Object mapping variable names to values
 	// Why useful: Provide consistent configuration without modifying shell profiles
 	// Initialize Command: Runs on HOST before container is created
-	// Purpose: Extract secrets and OAuth config from host system and prepare for container
+	// Purpose: Capture environment variables from host system for container authentication
 	// When executed: Before container build/start, runs on your Mac/host OS
-	// Why necessary: Container can't access macOS keychain or host home directory directly
-	// How it works: Extracts Claude OAuth token from keychain and OAuth account from ~/.claude.json
-	// Why tr -d '\n': security command adds trailing newline which makes token invalid
+	// How it works: Writes ANTHROPIC_* environment variables to files for container to read
 	// Security: Files are gitignored, only exist locally, deleted on container rebuild
-	"initializeCommand": "security find-generic-password -s 'Claude Code' -w 2>/dev/null | tr -d '\\n' > ${localWorkspaceFolder}/.devcontainer/.claude-token && jq '{oauthAccount, userID, hasAvailableSubscription}' ~/.claude.json > ${localWorkspaceFolder}/.devcontainer/.claude-oauth.json 2>/dev/null || echo 'Warning: Claude Code config extraction failed'",
+	// Required: ANTHROPIC_AUTH_TOKEN must be set in host environment
+	"initializeCommand": "[ -n \"$ANTHROPIC_AUTH_TOKEN\" ] && printf '%s' \"$ANTHROPIC_AUTH_TOKEN\" > ${localWorkspaceFolder}/.devcontainer/.claude-auth-token; [ -n \"$ANTHROPIC_BASE_URL\" ] && printf '%s' \"$ANTHROPIC_BASE_URL\" > ${localWorkspaceFolder}/.devcontainer/.claude-base-url; [ -n \"$ANTHROPIC_CUSTOM_HEADERS\" ] && printf '%s' \"$ANTHROPIC_CUSTOM_HEADERS\" > ${localWorkspaceFolder}/.devcontainer/.claude-custom-headers; echo 'Host config extraction complete'",
 
 	"remoteEnv": {
 		// WORKSPACE_DIR: Path to workspace directory
@@ -898,39 +897,42 @@ print_success "Created Dockerfile"
 # Extracting generate-claude-config.sh
 cat > "${DEVCONTAINER_DIR}/generate-claude-config.sh" << 'EOF_generate_claude_config_sh'
 #!/bin/bash
-# Generate .claude.json for container from host OAuth config + keychain token
+# Generate Claude Code configuration for container
+# Uses ANTHROPIC_AUTH_TOKEN environment variable only
 
-OAUTH_FILE=/workspace/.devcontainer/.claude-oauth.json
-TOKEN_FILE=/workspace/.devcontainer/.claude-token
+DEVCONTAINER_DIR=/workspace/.devcontainer
+AUTH_TOKEN_FILE="$DEVCONTAINER_DIR/.claude-auth-token"
+BASE_URL_FILE="$DEVCONTAINER_DIR/.claude-base-url"
+CUSTOM_HEADERS_FILE="$DEVCONTAINER_DIR/.claude-custom-headers"
 OUTPUT=~/.claude.json
+SETTINGS_OUTPUT=~/.claude/settings.json
 
-# Extract OAuth account from exported file
-OAUTH_ACCOUNT=$(jq '.oauthAccount' "$OAUTH_FILE" 2>/dev/null)
-USER_ID=$(jq -r '.userID // "generated-user-id"' "$OAUTH_FILE" 2>/dev/null)
-TOKEN=$(cat "$TOKEN_FILE" 2>/dev/null || echo "")
+# Ensure .claude directory exists
+mkdir -p ~/.claude
+
+# Read authentication from host-extracted files
+AUTH_TOKEN=$(cat "$AUTH_TOKEN_FILE" 2>/dev/null || echo "")
+BASE_URL=$(cat "$BASE_URL_FILE" 2>/dev/null || echo "")
+CUSTOM_HEADERS=$(cat "$CUSTOM_HEADERS_FILE" 2>/dev/null || echo "")
+
+if [ -z "$AUTH_TOKEN" ]; then
+    echo "Error: ANTHROPIC_AUTH_TOKEN not set"
+    echo "Please set ANTHROPIC_AUTH_TOKEN environment variable before starting container"
+    exit 1
+fi
+
+echo "Using ANTHROPIC_AUTH_TOKEN for authentication"
+
 # Get last 20 chars of token (Claude Code uses this as the key suffix)
-TOKEN_SUFFIX="${TOKEN: -20}"
+TOKEN_SUFFIX="${AUTH_TOKEN: -20}"
 
-# Create config with OAuth
+# Create minimal ~/.claude.json
 jq -n \
-  --argjson oauth "$OAUTH_ACCOUNT" \
-  --arg userId "$USER_ID" \
   --arg tokenSuffix "$TOKEN_SUFFIX" \
   '{
     numStartups: 1,
     installMethod: "devcontainer",
-    autoUpdates: true,
-    cachedStatsigGates: {
-      tengu_disable_bypass_permissions_mode: false,
-      tengu_tool_pear: false
-    },
-    sonnet45MigrationComplete: true,
-    shiftEnterKeyBindingInstalled: true,
     hasCompletedOnboarding: true,
-    hasOpusPlanDefault: false,
-    hasAvailableSubscription: false,
-    oauthAccount: $oauth,
-    userID: $userId,
     customApiKeyResponses: {
       approved: [$tokenSuffix],
       rejected: []
@@ -939,18 +941,28 @@ jq -n \
       "/workspace": {
         allowedTools: [],
         history: [],
-        mcpContextUris: [],
-        mcpServers: {},
-        enabledMcpjsonServers: [],
-        disabledMcpjsonServers: [],
-        hasTrustDialogAccepted: true,
-        ignorePatterns: []
+        hasTrustDialogAccepted: true
       }
     }
   }' > "$OUTPUT"
 
 chmod 600 "$OUTPUT"
-echo "Generated $OUTPUT with OAuth config"
+echo "Generated $OUTPUT"
+
+# Build settings.json with environment variables
+ENV_VARS=$(jq -n --arg val "$AUTH_TOKEN" '{ANTHROPIC_AUTH_TOKEN: $val}')
+
+[ -n "$BASE_URL" ] && ENV_VARS=$(echo "$ENV_VARS" | jq --arg val "$BASE_URL" '. + {ANTHROPIC_BASE_URL: $val}')
+[ -n "$CUSTOM_HEADERS" ] && ENV_VARS=$(echo "$ENV_VARS" | jq --arg val "$CUSTOM_HEADERS" '. + {ANTHROPIC_CUSTOM_HEADERS: $val}')
+
+jq -n --argjson env "$ENV_VARS" '{env: $env}' > "$SETTINGS_OUTPUT"
+chmod 600 "$SETTINGS_OUTPUT"
+
+# Report what was configured
+echo "Generated $SETTINGS_OUTPUT with environment variables:"
+echo "  - ANTHROPIC_AUTH_TOKEN: set"
+[ -n "$BASE_URL" ] && echo "  - ANTHROPIC_BASE_URL: $BASE_URL"
+[ -n "$CUSTOM_HEADERS" ] && echo "  - ANTHROPIC_CUSTOM_HEADERS: set"
 
 EOF_generate_claude_config_sh
 print_success "Created generate-claude-config.sh"
@@ -993,33 +1005,42 @@ The project uses a **two-stage distribution model**:
 
 ### Authentication Flow Architecture
 
-Multi-layered authentication system for Claude Code:
+Simple environment variable authentication using `ANTHROPIC_AUTH_TOKEN`:
 
 ```
-Host System (macOS)
+Host System
   ↓ initializeCommand (runs before container creation)
-  ├─→ Extract API key from macOS keychain
-  │   └─→ Write to .devcontainer/.claude-token (gitignored)
-  └─→ Extract OAuth config from ~/.claude.json
-      └─→ Write to .devcontainer/.claude-oauth.json (gitignored)
+  └─→ Capture ANTHROPIC_* environment variables from host
+      ├─→ ANTHROPIC_AUTH_TOKEN → .devcontainer/.claude-auth-token (required)
+      ├─→ ANTHROPIC_BASE_URL → .devcontainer/.claude-base-url (optional)
+      └─→ ANTHROPIC_CUSTOM_HEADERS → .devcontainer/.claude-custom-headers (optional)
 
 Container Creation
   ↓ postCreateCommand (runs inside container after creation)
   ├─→ Install Claude Code via npm
   └─→ Run generate-claude-config.sh
-      ├─→ Read .claude-token and .claude-oauth.json
-      ├─→ Generate ~/.claude.json (OAuth + API key)
-      └─→ Generate ~/.claude/settings.json (ANTHROPIC_API_KEY env var)
+      ├─→ Read credential files from .devcontainer/
+      ├─→ Generate ~/.claude.json (minimal config)
+      └─→ Generate ~/.claude/settings.json with env vars:
+          ├─→ ANTHROPIC_AUTH_TOKEN (required)
+          ├─→ ANTHROPIC_BASE_URL (if set)
+          └─→ ANTHROPIC_CUSTOM_HEADERS (if set)
 
 Result: Claude Code authenticated without manual login
 ```
 
+**Required environment variable**:
+- `ANTHROPIC_AUTH_TOKEN` - Must be set in host environment before starting container
+
+**Optional environment variables** (captured from host if set):
+- `ANTHROPIC_BASE_URL` - Custom API endpoint
+- `ANTHROPIC_CUSTOM_HEADERS` - Additional HTTP headers for API requests
+
 **Critical implementation details**:
 - `initializeCommand` runs on HOST before container exists
 - `postCreateCommand` runs INSIDE container after it's created
-- Two authentication methods for compatibility (OAuth + env var)
-- Token files are gitignored and never committed
-- `tr -d '\n'` strips trailing newline from keychain token (required)
+- All credential files are gitignored and never committed
+- Container will fail to configure if `ANTHROPIC_AUTH_TOKEN` is not set
 
 ### Security Architecture
 
@@ -1110,7 +1131,7 @@ bash /path/to/claude-container/install.sh
 - Creates .devcontainer/ directory
 - Extracts all embedded files
 - Makes generate-claude-config.sh executable
-- Adds .claude-token and .claude-oauth.json to .gitignore
+- Adds credential files to .gitignore
 
 ### Run Claude Code in Unsupervised Mode
 
@@ -1280,8 +1301,8 @@ The build system uses heredocs instead of base64 encoding or downloading files b
 ### Dynamic Configuration Generation
 
 Authentication configuration is generated dynamically by `generate-claude-config.sh` using `jq -n`:
-1. `~/.claude/settings.json` with `env.ANTHROPIC_API_KEY` (primary)
-2. `~/.claude.json` generated with OAuth account info and token suffix
+1. `~/.claude/settings.json` with `env.ANTHROPIC_AUTH_TOKEN`
+2. `~/.claude.json` with minimal config (onboarding complete, token suffix)
 
 No template file is needed - the script creates the JSON structure directly using jq.
 
@@ -1404,13 +1425,13 @@ free -h  # Should show ~8GB (if VM has 16GB)
 
 ## Platform Compatibility Notes
 
-### macOS-specific Features
+### Cross-Platform Authentication
 
-The `initializeCommand` in devcontainer.json uses macOS-specific commands:
-- `security find-generic-password` - Extracts from keychain
-- `tr -d '\n'` - Removes trailing newline from keychain output
+The `initializeCommand` uses standard shell commands that work on macOS, Linux, and Windows (WSL):
+- Environment variables are captured using `printf` and shell conditionals
+- No platform-specific commands are used
 
-**For Linux/Windows**: Users must modify initializeCommand or authenticate interactively inside container.
+**Requirement**: Set `ANTHROPIC_AUTH_TOKEN` in your environment before starting the container.
 
 ### Podman vs Docker
 
@@ -1438,13 +1459,14 @@ print_success "Created CLAUDE.md"
 chmod +x "${DEVCONTAINER_DIR}/generate-claude-config.sh"
 print_success "Set executable permissions on generate-claude-config.sh"
 
-# Add .devcontainer/.claude-token and .devcontainer/.claude-oauth.json to .gitignore if not already present
+# Add credential files to .gitignore if not already present
 GITIGNORE="${REPO_ROOT}/.gitignore"
-if ! grep -q ".devcontainer/.claude-token" "${GITIGNORE}" 2>/dev/null; then
+if ! grep -q ".devcontainer/.claude-auth-token" "${GITIGNORE}" 2>/dev/null; then
     echo "" >> "${GITIGNORE}"
     echo "# Claude Code authentication (auto-generated, keep secret)" >> "${GITIGNORE}"
-    echo ".devcontainer/.claude-token" >> "${GITIGNORE}"
-    echo ".devcontainer/.claude-oauth.json" >> "${GITIGNORE}"
+    echo ".devcontainer/.claude-auth-token" >> "${GITIGNORE}"
+    echo ".devcontainer/.claude-base-url" >> "${GITIGNORE}"
+    echo ".devcontainer/.claude-custom-headers" >> "${GITIGNORE}"
     print_success "Added authentication files to .gitignore"
 fi
 
@@ -1485,7 +1507,7 @@ echo "5. Wait for container to build (first time takes ~5 minutes)"
 echo ""
 echo "The container will automatically:"
 echo "  • Install Claude Code"
-echo "  • Configure authentication (macOS keychain)"
+echo "  • Configure authentication from ANTHROPIC_AUTH_TOKEN"
 echo "  • Set up development tools"
 echo ""
 echo "6. Run Claude Code in unsupervised mode (inside container):"

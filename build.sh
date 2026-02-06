@@ -231,7 +231,7 @@ echo "  • Rootless Podman-compatible container"
 echo "  • Minimal Linux capabilities (security hardened)"
 echo "  • Network isolation (slirp4netns)"
 echo "  • Automatic Claude Code installation"
-echo "  • OAuth + API key authentication support"
+echo "  • Environment variable authentication (ANTHROPIC_AUTH_TOKEN)"
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
@@ -278,13 +278,14 @@ cat >> "${OUTPUT_FILE}" << 'INSTALLER_FOOTER'
 chmod +x "${DEVCONTAINER_DIR}/generate-claude-config.sh"
 print_success "Set executable permissions on generate-claude-config.sh"
 
-# Add .devcontainer/.claude-token and .devcontainer/.claude-oauth.json to .gitignore if not already present
+# Add credential files to .gitignore if not already present
 GITIGNORE="${REPO_ROOT}/.gitignore"
-if ! grep -q ".devcontainer/.claude-token" "${GITIGNORE}" 2>/dev/null; then
+if ! grep -q ".devcontainer/.claude-auth-token" "${GITIGNORE}" 2>/dev/null; then
     echo "" >> "${GITIGNORE}"
     echo "# Claude Code authentication (auto-generated, keep secret)" >> "${GITIGNORE}"
-    echo ".devcontainer/.claude-token" >> "${GITIGNORE}"
-    echo ".devcontainer/.claude-oauth.json" >> "${GITIGNORE}"
+    echo ".devcontainer/.claude-auth-token" >> "${GITIGNORE}"
+    echo ".devcontainer/.claude-base-url" >> "${GITIGNORE}"
+    echo ".devcontainer/.claude-custom-headers" >> "${GITIGNORE}"
     print_success "Added authentication files to .gitignore"
 fi
 
@@ -325,7 +326,7 @@ echo "5. Wait for container to build (first time takes ~5 minutes)"
 echo ""
 echo "The container will automatically:"
 echo "  • Install Claude Code"
-echo "  • Configure authentication (macOS keychain)"
+echo "  • Configure authentication from ANTHROPIC_AUTH_TOKEN"
 echo "  • Set up development tools"
 echo ""
 echo "6. Run Claude Code in unsupervised mode (inside container):"

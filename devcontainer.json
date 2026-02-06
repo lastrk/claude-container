@@ -278,7 +278,7 @@
 	// Why .claude.json: Creates OAuth account config for organization support
 	// Why git --version: Verifies git works (tests safe.directory config)
 	// &&: Chain commands - each must succeed for next to run
-	"postCreateCommand": "mkdir -p /vscode ~/.claude && npm install -g @anthropic-ai/claude-code && if [ -f /workspace/.devcontainer/.claude-token ]; then TOKEN=$(cat /workspace/.devcontainer/.claude-token) && echo \"{\\\"env\\\": {\\\"ANTHROPIC_API_KEY\\\": \\\"$TOKEN\\\"}}\" > ~/.claude/settings.json && chmod 600 ~/.claude/settings.json; fi && if [ -f /workspace/.devcontainer/generate-claude-config.sh ]; then /workspace/.devcontainer/generate-claude-config.sh; fi && echo 'DevContainer created successfully! Claude Code installed.' && git --version",
+	"postCreateCommand": "mkdir -p /vscode ~/.claude && npm install -g @anthropic-ai/claude-code && if [ -f /workspace/.devcontainer/generate-claude-config.sh ]; then /workspace/.devcontainer/generate-claude-config.sh; fi && echo 'DevContainer created successfully! Claude Code installed.' && git --version",
 
 	// Forward Ports: Automatically forward ports from container to host
 	// Purpose: Makes services running in container accessible from host browser/tools
@@ -310,13 +310,12 @@
 	// Format: Object mapping variable names to values
 	// Why useful: Provide consistent configuration without modifying shell profiles
 	// Initialize Command: Runs on HOST before container is created
-	// Purpose: Extract secrets and OAuth config from host system and prepare for container
+	// Purpose: Capture environment variables from host system for container authentication
 	// When executed: Before container build/start, runs on your Mac/host OS
-	// Why necessary: Container can't access macOS keychain or host home directory directly
-	// How it works: Extracts Claude OAuth token from keychain and OAuth account from ~/.claude.json
-	// Why tr -d '\n': security command adds trailing newline which makes token invalid
+	// How it works: Writes ANTHROPIC_* environment variables to files for container to read
 	// Security: Files are gitignored, only exist locally, deleted on container rebuild
-	"initializeCommand": "security find-generic-password -s 'Claude Code' -w 2>/dev/null | tr -d '\\n' > ${localWorkspaceFolder}/.devcontainer/.claude-token && jq '{oauthAccount, userID, hasAvailableSubscription}' ~/.claude.json > ${localWorkspaceFolder}/.devcontainer/.claude-oauth.json 2>/dev/null || echo 'Warning: Claude Code config extraction failed'",
+	// Required: ANTHROPIC_AUTH_TOKEN must be set in host environment
+	"initializeCommand": "[ -n \"$ANTHROPIC_AUTH_TOKEN\" ] && printf '%s' \"$ANTHROPIC_AUTH_TOKEN\" > ${localWorkspaceFolder}/.devcontainer/.claude-auth-token; [ -n \"$ANTHROPIC_BASE_URL\" ] && printf '%s' \"$ANTHROPIC_BASE_URL\" > ${localWorkspaceFolder}/.devcontainer/.claude-base-url; [ -n \"$ANTHROPIC_CUSTOM_HEADERS\" ] && printf '%s' \"$ANTHROPIC_CUSTOM_HEADERS\" > ${localWorkspaceFolder}/.devcontainer/.claude-custom-headers; echo 'Host config extraction complete'",
 
 	"remoteEnv": {
 		// WORKSPACE_DIR: Path to workspace directory
