@@ -186,6 +186,7 @@ mcr.microsoft.com/devcontainers/base:ubuntu-22.04
 | cmake, ninja | Build system | apt |
 | python3, pip | Python tooling | apt |
 | node.js, npm | Claude Code, npx | NodeSource |
+| gh | GitHub CLI | GitHub apt repo |
 | pkgx | User-space package manager | pkgx.sh installer |
 
 ### Mount Points
@@ -506,6 +507,50 @@ git push
 ```
 
 **Note**: Git credentials may need to be configured. Use SSH keys or GitHub CLI for authentication.
+
+### GitHub CLI Authentication
+
+The container includes the GitHub CLI (`gh`). To authenticate inside the container:
+
+```bash
+# Interactive login (opens browser on host for OAuth)
+gh auth login
+
+# Verify authentication
+gh auth status
+```
+
+#### Requesting Read-Only Scopes for a GitHub Organization
+
+By default, `gh auth login` does not request organization-level permissions. If you need read-only access to repositories in a GitHub organization, request the `read:org` scope:
+
+```bash
+# Login with read-only org scope
+gh auth login --scopes read:org
+
+# Or add the scope to an existing session
+gh auth refresh --scopes read:org
+```
+
+If you only need to clone and read private repositories within an org (without write access), use:
+
+```bash
+gh auth login --scopes read:org,repo
+```
+
+**Common read-only scopes:**
+
+| Scope | Access |
+|-------|--------|
+| `read:org` | Read org membership, teams, and settings |
+| `repo` | Full repo access (read + write); use for cloning private repos |
+| `read:project` | Read access to organization projects |
+| `read:packages` | Read access to GitHub Packages |
+
+**Note**: GitHub does not offer a read-only `repo` scope — `repo` grants full access. For truly read-only repo access, consider using a [fine-grained personal access token](https://github.com/settings/tokens?type=beta) with "Contents: Read-only" permission scoped to specific repositories, then authenticate with:
+```bash
+gh auth login --with-token < token.txt
+```
 
 ### Adjusting Resource Limits
 

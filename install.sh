@@ -3,8 +3,8 @@ set -e
 
 # Secure DevContainer Configuration Installer
 # Self-contained installer with all configuration files embedded
-# Generated from commit: 3216461
-# Build date: 2025-10-24 15:36:21
+# Generated from commit: 8253e45
+# Build date: 2026-02-06 10:21:21
 
 
 # Colors for output
@@ -619,6 +619,18 @@ RUN apt-get update && apt-get install -y \
     # Why necessary: Claude Code is distributed as npm package (@anthropic-ai/claude-code)
     # Why LTS: Long-term support version is stable and secure
     && apt-get install -y nodejs \
+    # GitHub CLI (gh) Installation
+    # Purpose: Official GitHub CLI for managing repos, PRs, issues, and auth from terminal
+    # Why included: Essential for Git workflows inside the container (clone, push, PR review)
+    # Repository: GitHub's official apt repository (packages.githubcli.com)
+    # Security: Key fetched over HTTPS, repository added as trusted source
+    && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+        -o /usr/share/keyrings/githubcli-archive-keyring.gpg \
+    && chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+        > /etc/apt/sources.list.d/github-cli.list \
+    && apt-get update \
+    && apt-get install -y gh \
     # Cleanup: Remove package manager caches and temporary files
     # Purpose: Reduce final image size significantly (can save 100+ MB)
     # Why necessary: These files are only needed during installation, not at runtime
