@@ -3,8 +3,8 @@ set -e
 
 # Secure DevContainer Configuration Installer
 # Self-contained installer with all configuration files embedded
-# Generated from commit: 8253e45
-# Build date: 2026-02-06 10:21:21
+# Generated from commit: 96576c1
+# Build date: 2026-03-17 21:52:59
 
 
 # Colors for output
@@ -724,13 +724,13 @@ RUN su vscode -c 'curl -fsSL https://pkgx.sh | sh' && \
 #     echo 'source $HOME/.cargo/env' >> /home/vscode/.bashrc
 #
 # # Install additional Rust components (optional)
-# # RUN su vscode -c 'rustup component add rustfmt clippy rust-analyzer'
+# # RUN su vscode -c 'source $HOME/.cargo/env && rustup component add rustfmt clippy rust-analyzer'
 #
 # # Install additional toolchains (optional)
-# # RUN su vscode -c 'rustup toolchain install nightly beta'
+# # RUN su vscode -c 'source $HOME/.cargo/env && rustup toolchain install nightly beta'
 #
 # # Verify installation
-# # RUN su vscode -c 'rustc --version && cargo --version && rustup --version'
+# # RUN su vscode -c 'source $HOME/.cargo/env && rustc --version && cargo --version && rustup --version'
 
 # ------------------------------------------------------------------------------
 # C++ Development Environment (LLVM/Clang)
