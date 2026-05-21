@@ -315,7 +315,7 @@
 	// How it works: Writes ANTHROPIC_* environment variables to files for container to read
 	// Security: Files are gitignored, only exist locally, deleted on container rebuild
 	// Required: ANTHROPIC_AUTH_TOKEN must be set in host environment
-	"initializeCommand": "[ -n \"$ANTHROPIC_AUTH_TOKEN\" ] && printf '%s' \"$ANTHROPIC_AUTH_TOKEN\" > ${localWorkspaceFolder}/.devcontainer/.claude-auth-token; [ -n \"$ANTHROPIC_BASE_URL\" ] && printf '%s' \"$ANTHROPIC_BASE_URL\" > ${localWorkspaceFolder}/.devcontainer/.claude-base-url; [ -n \"$ANTHROPIC_CUSTOM_HEADERS\" ] && printf '%s' \"$ANTHROPIC_CUSTOM_HEADERS\" > ${localWorkspaceFolder}/.devcontainer/.claude-custom-headers; echo 'Host config extraction complete'",
+	"initializeCommand": "[ -n \"$ANTHROPIC_AUTH_TOKEN\" ] && printf '%s' \"$ANTHROPIC_AUTH_TOKEN\" > ${localWorkspaceFolder}/.devcontainer/.claude-auth-token; [ -n \"$ANTHROPIC_BASE_URL\" ] && printf '%s' \"$ANTHROPIC_BASE_URL\" > ${localWorkspaceFolder}/.devcontainer/.claude-base-url; [ -n \"$ANTHROPIC_CUSTOM_HEADERS\" ] && printf '%s' \"$ANTHROPIC_CUSTOM_HEADERS\" > ${localWorkspaceFolder}/.devcontainer/.claude-custom-headers; rm -f ${localWorkspaceFolder}/.devcontainer/.gh-auth-token; if command -v gh >/dev/null 2>&1; then if gh auth status >/dev/null 2>&1; then gh auth token > ${localWorkspaceFolder}/.devcontainer/.gh-auth-token && echo 'GitHub CLI authenticated on host, token captured for container'; else echo 'GitHub CLI installed on host but not logged in, skipping GitHub auth injection'; fi; else echo 'GitHub CLI (gh) not installed on host, skipping GitHub auth injection'; fi; echo 'Host config extraction complete'",
 
 	"remoteEnv": {
 		// WORKSPACE_DIR: Path to workspace directory
