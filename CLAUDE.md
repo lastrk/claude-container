@@ -222,11 +222,12 @@ When `build.sh` runs, it reads files from project root and embeds them in `insta
 - Produces self-contained install.sh (~60KB)
 - Makes installer executable (chmod +x)
 
-**Files embedded** (defined in build.sh:31-36):
+**Files embedded** (defined in the `FILES` array near the top of `build.sh`):
 1. devcontainer.json
 2. Dockerfile
 3. generate-claude-config.sh
-4. CLAUDE.md (this file)
+4. link-host-claude.sh
+5. CLAUDE.md (this file)
 
 ### Test the Installer Locally
 
@@ -244,8 +245,8 @@ bash /path/to/claude-container/install.sh
 - Shows interactive prompt with ESC to cancel
 - Creates .devcontainer/ directory
 - Extracts all embedded files
-- Makes generate-claude-config.sh executable
-- Adds credential files to .gitignore
+- Makes `generate-claude-config.sh` and `link-host-claude.sh` executable
+- Adds `.devcontainer/.gh-auth-token` to `.gitignore` (the only credential file the container actively writes; three legacy `.claude-*` entries are also added as cleanup hints for upgraders)
 
 ### Upgrading an Existing Install
 
@@ -447,19 +448,18 @@ The build system uses heredocs instead of base64 encoding or downloading files b
 
 ### Dynamic Configuration Generation
 
-Authentication configuration is generated dynamically by `generate-claude-config.sh` using `jq -n`:
-1. `~/.claude/settings.json` with `env.ANTHROPIC_AUTH_TOKEN`
-2. `~/.claude.json` with minimal config (onboarding complete, token suffix)
+`generate-claude-config.sh` produces a single file at runtime — `~/.claude.json` — using `jq -n` to build a minimal onboarding stub (onboarding complete, token suffix). No template file is needed; the script creates the JSON structure directly.
 
-No template file is needed - the script creates the JSON structure directly using jq.
+Anthropic credentials are NOT materialized to disk by this script. They live as process environment variables (injected via devcontainer.json `containerEnv` from the host shell) and are read by Claude Code directly. This frees `~/.claude/settings.json` to be symlinked from the host by `link-host-claude.sh` (see "Host `~/.claude` exposure").
 
 ### File Naming Convention in build.sh
 
 Heredoc EOF delimiters use file names with special characters replaced:
 - `devcontainer.json` → `EOF_devcontainer_json`
 - `generate-claude-config.sh` → `EOF_generate_claude_config_sh`
+- `link-host-claude.sh` → `EOF_link_host_claude_sh`
 
-This is done by `${file//[.-]/_}` bash substitution (line 199).
+This is done by a `${file//[.-]/_}` bash substitution inside the embedding loop in `build.sh`. A build-time guard refuses to build if any source file contains a line literally equal to its munged EOF marker (which would prematurely close its heredoc in the generated `install.sh`).
 
 ### Why install.sh is Tracked in Git
 
@@ -473,25 +473,20 @@ Though install.sh is a generated artifact, it's tracked in version control becau
 
 ### Adding a New File to Embed
 
-1. Create the file in project root
-2. Add to `FILES` array in build.sh (line 31-36):
-   ```bash
-   FILES=(
-       "devcontainer.json"
-       "Dockerfile"
-       "your-new-file.txt"  # Add here
-   )
-   ```
-3. Update installer display in build.sh if needed (line 152-157)
-4. Rebuild: `./build.sh`
+1. Create the file in project root.
+2. Add it to the outer `FILES` array near the top of `build.sh`.
+3. Add it to the inner `FILES` array inside the `INSTALLER_LOGIC` heredoc (the array literal that ends up in the generated `install.sh`). Both must list the same files in the same order.
+4. If the file is an executable script, add a matching `chmod +x` line alongside the existing one for `generate-claude-config.sh`.
+5. Rebuild: `./build.sh`.
 
 ### Changing Installer Behavior
 
-Installer logic is in three sections of build.sh:
+The body of the generated `install.sh` lives inside several heredocs in `build.sh`:
 
-1. **Header** (line 78-93): Shebang, version info
-2. **Main logic** (line 94-193): Installation flow, error checking
-3. **Footer** (line 209-268): Post-install, .gitignore updates, next steps
+- `INSTALLER_HEADER` — shebang, colors, helper functions
+- `CURRENT_FN_HEADER` and the surrounding loop — emits `write_current_templates`, which writes the current-release templates
+- The `--merge` baseline emission — emits `write_previous_templates` (or a stub if no prior `install.sh` exists in git HEAD)
+- `INSTALLER_LOGIC` — argument parsing, mode dispatch (install / `--force-upgrade` / `--merge`), gitignore updates, next-steps output
 
 Edit the heredoc strings in build.sh, then rebuild.
 
@@ -520,9 +515,9 @@ code .
 
 ### "Missing source file" error
 
-**Cause**: build.sh expects all files in `FILES` array to exist
+**Cause**: build.sh expects every file in the outer `FILES` array to exist
 
-**Solution**: Ensure all files listed in build.sh:31-36 are present in project root
+**Solution**: Ensure all files listed in the `FILES` array (near the top of build.sh) are present in project root
 
 ### Container resources don't match configuration (macOS)
 
@@ -558,11 +553,11 @@ nproc  # Should show 8 (if VM has 10+)
 free -h  # Should show ~8GB (if VM has 16GB)
 ```
 
-### Installer creates malformed files
+### Build refuses with "source ... contains a line literally equal to 'EOF_...'"
 
-**Cause**: Heredoc EOF delimiter collision (file contains `EOF_filename` string)
+**Cause**: A line in one of the source files would prematurely close that file's heredoc in the generated install.sh. This is caught at build time by an explicit guard, NOT at install time.
 
-**Solution**: Change delimiter name in build.sh:199 to something unique
+**Solution**: Edit the offending line in the source file (rename, escape, or split across lines so no line equals the EOF marker exactly). Re-run `./build.sh`.
 
 ### Git commit hash shows "unknown"
 
@@ -574,11 +569,11 @@ free -h  # Should show ~8GB (if VM has 16GB)
 
 ### Cross-Platform Authentication
 
-The `initializeCommand` uses standard shell commands that work on macOS, Linux, and Windows (WSL):
-- Environment variables are captured using `printf` and shell conditionals
-- No platform-specific commands are used
+Anthropic credentials flow through devcontainer.json `containerEnv` with `${localEnv:VAR}` references. The devcontainer CLI resolves those from the host shell at container-creation time on every supported platform (macOS, Linux, Windows/WSL). No platform-specific code paths.
 
-**Requirement**: Set `ANTHROPIC_AUTH_TOKEN` in your environment before starting the container.
+`initializeCommand` is now only used for two cross-platform tasks: `mkdir -p ${localEnv:HOME}/.claude` (defensive pre-create for the readonly bind mount) and the optional `gh auth token` capture. Both work on any POSIX-ish shell available in WSL or native Linux/macOS.
+
+**Requirement**: Set `ANTHROPIC_AUTH_TOKEN` in your host shell environment before starting the container. If it resolves to empty, `generate-claude-config.sh` aborts with a clear error.
 
 ### Podman vs Docker
 
