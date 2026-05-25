@@ -1,32 +1,27 @@
 #!/bin/bash
 # Generate Claude Code configuration for container
-# Uses ANTHROPIC_AUTH_TOKEN environment variable only
+# Reads ANTHROPIC_* credentials from process env (injected via devcontainer.json
+# `containerEnv` from the host shell). No file-based handoff anymore.
 
 DEVCONTAINER_DIR=/workspace/.devcontainer
-AUTH_TOKEN_FILE="$DEVCONTAINER_DIR/.claude-auth-token"
-BASE_URL_FILE="$DEVCONTAINER_DIR/.claude-base-url"
-CUSTOM_HEADERS_FILE="$DEVCONTAINER_DIR/.claude-custom-headers"
 OUTPUT=~/.claude.json
-SETTINGS_OUTPUT=~/.claude/settings.json
 
-# Ensure .claude directory exists
+# Ensure .claude directory exists (a real, writable dir alongside the readonly
+# /home/vscode/.claude-host bind mount; symlinks from .claude-host are wired up
+# afterwards by link-host-claude.sh).
 mkdir -p ~/.claude
 
-# Read authentication from host-extracted files
-AUTH_TOKEN=$(cat "$AUTH_TOKEN_FILE" 2>/dev/null || echo "")
-BASE_URL=$(cat "$BASE_URL_FILE" 2>/dev/null || echo "")
-CUSTOM_HEADERS=$(cat "$CUSTOM_HEADERS_FILE" 2>/dev/null || echo "")
-
-if [ -z "$AUTH_TOKEN" ]; then
+if [ -z "$ANTHROPIC_AUTH_TOKEN" ]; then
     echo "Error: ANTHROPIC_AUTH_TOKEN not set"
-    echo "Please set ANTHROPIC_AUTH_TOKEN environment variable before starting container"
+    echo "Please set ANTHROPIC_AUTH_TOKEN in your host environment before starting the container."
+    echo "(It is forwarded into the container via devcontainer.json containerEnv.)"
     exit 1
 fi
 
-echo "Using ANTHROPIC_AUTH_TOKEN for authentication"
+echo "Using ANTHROPIC_AUTH_TOKEN from container env for authentication"
 
 # Get last 20 chars of token (Claude Code uses this as the key suffix)
-TOKEN_SUFFIX="${AUTH_TOKEN: -20}"
+TOKEN_SUFFIX="${ANTHROPIC_AUTH_TOKEN: -20}"
 
 # Create minimal ~/.claude.json
 # No MCP servers are pre-registered. Install on demand inside the container and add
@@ -53,20 +48,13 @@ jq -n \
 chmod 600 "$OUTPUT"
 echo "Generated $OUTPUT"
 
-# Build settings.json with environment variables
-ENV_VARS=$(jq -n --arg val "$AUTH_TOKEN" '{ANTHROPIC_AUTH_TOKEN: $val}')
-
-[ -n "$BASE_URL" ] && ENV_VARS=$(echo "$ENV_VARS" | jq --arg val "$BASE_URL" '. + {ANTHROPIC_BASE_URL: $val}')
-[ -n "$CUSTOM_HEADERS" ] && ENV_VARS=$(echo "$ENV_VARS" | jq --arg val "$CUSTOM_HEADERS" '. + {ANTHROPIC_CUSTOM_HEADERS: $val}')
-
-jq -n --argjson env "$ENV_VARS" '{env: $env}' > "$SETTINGS_OUTPUT"
-chmod 600 "$SETTINGS_OUTPUT"
-
-# Report what was configured
-echo "Generated $SETTINGS_OUTPUT with environment variables:"
+# Auth env vars are injected by containerEnv — no ~/.claude/settings.json write.
+# That frees ~/.claude/settings.json to be a symlink to the host's settings.json
+# (created by link-host-claude.sh if present on host).
+echo "Auth env vars (from containerEnv):"
 echo "  - ANTHROPIC_AUTH_TOKEN: set"
-[ -n "$BASE_URL" ] && echo "  - ANTHROPIC_BASE_URL: $BASE_URL"
-[ -n "$CUSTOM_HEADERS" ] && echo "  - ANTHROPIC_CUSTOM_HEADERS: set"
+[ -n "$ANTHROPIC_BASE_URL" ]      && echo "  - ANTHROPIC_BASE_URL: $ANTHROPIC_BASE_URL"
+[ -n "$ANTHROPIC_CUSTOM_HEADERS" ] && echo "  - ANTHROPIC_CUSTOM_HEADERS: set"
 
 # GitHub CLI authentication (optional, captured from host by initializeCommand)
 GH_TOKEN_FILE="$DEVCONTAINER_DIR/.gh-auth-token"

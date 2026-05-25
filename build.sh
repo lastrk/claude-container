@@ -32,6 +32,7 @@ FILES=(
     "devcontainer.json"
     "Dockerfile"
     "generate-claude-config.sh"
+    "link-host-claude.sh"
     "CLAUDE.md"
 )
 
@@ -243,7 +244,7 @@ REPO_ROOT=$(git rev-parse --show-toplevel)
 DEVCONTAINER_DIR="${REPO_ROOT}/.devcontainer"
 
 # Files this installer manages — kept in sync with build.sh FILES array
-FILES=(devcontainer.json Dockerfile generate-claude-config.sh CLAUDE.md)
+FILES=(devcontainer.json Dockerfile generate-claude-config.sh link-host-claude.sh CLAUDE.md)
 
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -428,23 +429,24 @@ done
 # Make shell scripts executable
 chmod +x "${DEVCONTAINER_DIR}/generate-claude-config.sh"
 print_success "Set executable permissions on generate-claude-config.sh"
+chmod +x "${DEVCONTAINER_DIR}/link-host-claude.sh"
+print_success "Set executable permissions on link-host-claude.sh"
 
-# Add credential files to .gitignore if not already present
+# Add credential files to .gitignore if not already present.
+# As of the containerEnv migration, only the GitHub token is still file-based
+# (ANTHROPIC_* now flow through containerEnv from the host shell). The three
+# .claude-* entries are kept here as a safety net for older installs that may
+# have leftover files on disk from the previous installer release.
 GITIGNORE="${REPO_ROOT}/.gitignore"
-if ! grep -q ".devcontainer/.claude-auth-token" "${GITIGNORE}" 2>/dev/null; then
+if ! grep -q ".devcontainer/.gh-auth-token" "${GITIGNORE}" 2>/dev/null; then
     echo "" >> "${GITIGNORE}"
-    echo "# Claude Code authentication (auto-generated, keep secret)" >> "${GITIGNORE}"
+    echo "# Claude Code / GitHub authentication (auto-generated, keep secret)" >> "${GITIGNORE}"
+    echo ".devcontainer/.gh-auth-token" >> "${GITIGNORE}"
+    # Legacy entries from pre-containerEnv installers; harmless if never created.
     echo ".devcontainer/.claude-auth-token" >> "${GITIGNORE}"
     echo ".devcontainer/.claude-base-url" >> "${GITIGNORE}"
     echo ".devcontainer/.claude-custom-headers" >> "${GITIGNORE}"
-    echo ".devcontainer/.gh-auth-token" >> "${GITIGNORE}"
     print_success "Added authentication files to .gitignore"
-fi
-
-# Add gh token file separately for upgrades from older installers
-if ! grep -q ".devcontainer/.gh-auth-token" "${GITIGNORE}" 2>/dev/null; then
-    echo ".devcontainer/.gh-auth-token" >> "${GITIGNORE}"
-    print_success "Added GitHub token file to .gitignore"
 fi
 
 echo ""

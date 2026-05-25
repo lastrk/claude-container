@@ -18,6 +18,7 @@ The project uses a **two-stage distribution model**:
    - `devcontainer.json` - DevContainer configuration with security hardening
    - `Dockerfile` - Container image definition
    - `generate-claude-config.sh` - Runtime authentication configuration script
+   - `link-host-claude.sh` - Symlinks selected host `~/.claude` entries into the container
    - `CLAUDE.md` - Documentation embedded in installer
 
 2. **build.sh** - Build script that:
@@ -34,39 +35,41 @@ The project uses a **two-stage distribution model**:
 
 ### Authentication Flow Architecture
 
-Simple environment variable authentication using `ANTHROPIC_AUTH_TOKEN`, plus an optional GitHub CLI auth bridge:
+Anthropic credentials flow through devcontainer-native `containerEnv` references (no file-based handoff). GitHub CLI auth is bridged separately via a temporary token file because `gh auth token` is a command output, not an env var.
 
 ```
 Host System
-  ↓ initializeCommand (runs before container creation)
-  ├─→ Capture ANTHROPIC_* environment variables from host
-  │   ├─→ ANTHROPIC_AUTH_TOKEN → .devcontainer/.claude-auth-token (required)
-  │   ├─→ ANTHROPIC_BASE_URL → .devcontainer/.claude-base-url (optional)
-  │   └─→ ANTHROPIC_CUSTOM_HEADERS → .devcontainer/.claude-custom-headers (optional)
+  ↓ devcontainer CLI resolves ${localEnv:VAR} at container creation
+  ├─→ containerEnv.ANTHROPIC_AUTH_TOKEN     ← $ANTHROPIC_AUTH_TOKEN     (required)
+  ├─→ containerEnv.ANTHROPIC_BASE_URL       ← $ANTHROPIC_BASE_URL       (optional)
+  └─→ containerEnv.ANTHROPIC_CUSTOM_HEADERS ← $ANTHROPIC_CUSTOM_HEADERS (optional)
+
+  ↓ initializeCommand (runs on HOST before container creation)
+  ├─→ mkdir -p ${HOME}/.claude              (so the readonly bind mount won't fail)
   └─→ If gh CLI is installed AND logged in on host:
       └─→ `gh auth token` → .devcontainer/.gh-auth-token (optional)
 
 Container Creation
-  ↓ postCreateCommand (runs inside container after creation)
+  ↓ Container starts with all containerEnv vars set as real process env
+  ↓ postCreateCommand (runs INSIDE container after creation)
   ├─→ Install Claude Code via npm
-  └─→ Run generate-claude-config.sh
-      ├─→ Read credential files from .devcontainer/
-      ├─→ Generate ~/.claude.json (minimal config)
-      ├─→ Generate ~/.claude/settings.json with env vars:
-      │   ├─→ ANTHROPIC_AUTH_TOKEN (required)
-      │   ├─→ ANTHROPIC_BASE_URL (if set)
-      │   └─→ ANTHROPIC_CUSTOM_HEADERS (if set)
-      └─→ If .gh-auth-token was captured:
-          └─→ `gh auth login --with-token` populates ~/.config/gh/hosts.yml
+  ├─→ generate-claude-config.sh
+  │   ├─→ Reads $ANTHROPIC_AUTH_TOKEN (from containerEnv) — aborts if empty
+  │   ├─→ Generates ~/.claude.json (onboarding stub, token-suffix entry)
+  │   └─→ If .gh-auth-token was captured:
+  │       └─→ `gh auth login --with-token` populates ~/.config/gh/hosts.yml
+  └─→ link-host-claude.sh (see "Host ~/.claude exposure" below)
 
-Result: Claude Code authenticated without manual login.
+Result: Claude Code reads ANTHROPIC_AUTH_TOKEN from process env in every shell
+        (containerEnv applies to ALL container processes, including direct
+         `podman exec`, not just IDE-spawned ones).
         If host had gh logged in, `gh` works in every container shell too.
 ```
 
 **Required environment variable**:
 - `ANTHROPIC_AUTH_TOKEN` - Must be set in host environment before starting container
 
-**Optional environment variables** (captured from host if set):
+**Optional environment variables** (forwarded if set):
 - `ANTHROPIC_BASE_URL` - Custom API endpoint
 - `ANTHROPIC_CUSTOM_HEADERS` - Additional HTTP headers for API requests
 
@@ -74,14 +77,43 @@ Result: Claude Code authenticated without manual login.
 - If `gh` is installed on the host AND the user is logged in (`gh auth status` succeeds), `initializeCommand` runs `gh auth token` and writes the result to `.devcontainer/.gh-auth-token`.
 - Inside the container, `generate-claude-config.sh` pipes that token into `gh auth login --with-token`, which writes `~/.config/gh/hosts.yml`. The token is then available to every shell in the container — both the user's terminal and any Claude Code subprocess — without setting an env var.
 - If `gh` is missing on the host or the user isn't logged in, the step is skipped with a status message; Anthropic auth and the rest of the container build are unaffected.
-- `.devcontainer/.gh-auth-token` is gitignored alongside the Anthropic credential files.
+- `.devcontainer/.gh-auth-token` is gitignored.
 
 **Critical implementation details**:
-- `initializeCommand` runs on HOST before container exists
-- `postCreateCommand` runs INSIDE container after it's created
-- All credential files are gitignored and never committed
-- Container will fail to configure if `ANTHROPIC_AUTH_TOKEN` is not set
-- The gh token is recaptured on every container init, so revoking it on the host (via `gh auth logout`) takes effect after the next container rebuild
+- `containerEnv` references resolve `${localEnv:VAR}` from the host shell at container-creation time and bake the value into the container's process env. There is no on-disk handoff for ANTHROPIC_* credentials.
+- `initializeCommand` runs on HOST before container exists (used only for the gh token bridge and the defensive `mkdir -p ~/.claude` for the readonly mount).
+- `postCreateCommand` runs INSIDE container after it's created.
+- `.gh-auth-token` is the only credential file ever written to `.devcontainer/`; it's gitignored.
+- Container will fail to configure if `ANTHROPIC_AUTH_TOKEN` resolves to an empty string.
+- The gh token is recaptured on every container init, so revoking it on the host (via `gh auth logout`) takes effect after the next container rebuild.
+
+### Host `~/.claude` exposure
+
+The host's user-level `~/.claude` directory is bind-mounted **read-only** into the container at `/home/vscode/.claude-host`, and `link-host-claude.sh` symlinks selected entries from that mount into the writable `~/.claude` inside the container. This makes the user's host-side Claude Code config — settings, plugins, slash commands, agents, skills, user `CLAUDE.md`, MCP server definitions, etc. — available inside every container without each rebuild reauthorizing or reinstalling them.
+
+**What gets symlinked**: every top-level entry in the host `~/.claude` EXCEPT a small denylist of runtime-write paths (kept in `link-host-claude.sh`):
+
+- Runtime state dirs: `projects/`, `tasks/`, `plans/`, `sessions/`, `session-env/`, `daemon/`, `shell-snapshots/`, `telemetry/`, `file-history/`, `paste-cache/`, `cache/`, `backups/`, `ide/`, `debug/`, `jobs/`, `memory/`
+- Runtime state files: `history.jsonl`, `daemon.log`, `mcp-needs-auth-cache.json`, `stats-cache.json`, `.last-cleanup`
+- Noise: `.DS_Store`
+
+Everything not on the denylist is symlinked — new Claude-config-style dirs (e.g. future `agents/`, `skills/`, `output-styles/`) are picked up automatically without changes here.
+
+**Why a sibling mount + symlinks** (not a direct mount at `~/.claude`):
+- Claude Code continuously writes to many paths under `~/.claude/` during normal operation. A read-only mount at that path would break writes on every turn.
+- The sibling mount keeps host state pristine and lets the container own its own runtime data.
+
+**Gotchas — read before relying on this**:
+
+1. **Host-absolute paths leak through symlinked configs.** Host `settings.json` and `mcp.json` may reference paths like `/Users/<you>/dev/...` that simply don't exist in the Linux container. Affected plugins or MCP servers will fail to load. **Workaround:** make the path resolvable (add another mount) or remove the broken symlink in `~/.claude`.
+2. **Plugins may have macOS-arch native binaries.** Most plugins are JS via `npx` or Python via `uv tool` and are arch-agnostic, but anything with native modules built for macOS won't run on Linux.
+3. **Plugin auto-update fails silently against the read-only mount.** Marketplaces under `plugins/marketplaces/` are git clones; their auto-`git fetch` probes can't write to the mount. Claude handles this gracefully.
+4. **Secrets are visible to the container.** `mcp.json`, plugin OAuth caches, and similar files may contain tokens. The read-only mount protects the host from container writes, NOT the container from reading host secrets. Combined with `--dangerously-skip-permissions`, treat the in-container Claude as having access to every secret under your host `~/.claude`.
+5. **Multi-machine state surprise.** Edits on the host show up in the container after one shell roundtrip — convenient most of the time, occasionally jarring.
+6. **Memory is intentionally excluded.** `~/.claude/memory/` is on the denylist because Claude Code writes there. In-container Claude builds its own memory store and does not see host memories.
+7. **Sibling mount source must exist.** `initializeCommand` runs `mkdir -p ${HOME}/.claude` on the host before container creation so a fresh machine doesn't fail the bind mount.
+
+**To unlink a single host entry** (e.g., a broken plugin): inside the container, `rm ~/.claude/<entry>`. It only removes the symlink — the host file is untouched. On next rebuild the symlink will be recreated; to make removal sticky, add `<entry>` to the `DENYLIST` array in `link-host-claude.sh` and rebuild the installer.
 
 ### Installing MCP Servers on Demand
 

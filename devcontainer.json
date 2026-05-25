@@ -53,7 +53,27 @@
 		// Note: Includes .devcontainer directory - not mounted separately as read-only
 		// Rationale: Container config files aren't accessed at runtime; complexity
 		//            of read-only mounting outweighs security benefit in dev environment
-		"source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=cached"
+		"source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=cached",
+
+		// Host User-Level Claude Config Mount (Read-Only)
+		// Purpose: Exposes the host's ~/.claude directory inside the container so
+		//          link-host-claude.sh can symlink selected entries (settings.json,
+		//          plugins/, commands/, agents/, skills/, CLAUDE.md, mcp.json, etc.)
+		//          into the container's writable ~/.claude.
+		// source: ${localEnv:HOME}/.claude resolves to the host user's Claude dir.
+		// target: /home/vscode/.claude-host — a SIBLING path that does NOT collide
+		//         with the container's writable ~/.claude where Claude Code writes
+		//         (history.jsonl, projects/, plans/, sessions/, memory/, etc.).
+		// readonly: prevents in-container Claude Code from mutating host state.
+		// Pre-flight: initializeCommand does `mkdir -p ${localEnv:HOME}/.claude` so
+		//             this mount never fails on a fresh host install.
+		// Gotchas (see CLAUDE.md "Host ~/.claude exposure"):
+		//   - Host settings.json / mcp.json may reference host-absolute paths
+		//     (/Users/...) that don't resolve inside the Linux container.
+		//   - plugins/ may contain macOS-arch native binaries that won't run.
+		//   - Secrets in mcp.json / plugin OAuth caches are visible to the
+		//     container (read-only stops writes, not reads).
+		"source=${localEnv:HOME}/.claude,target=/home/vscode/.claude-host,type=bind,readonly"
 	],
 
 	// Workspace Folder: Initial working directory inside container
@@ -278,7 +298,7 @@
 	// Why .claude.json: Creates OAuth account config for organization support
 	// Why git --version: Verifies git works (tests safe.directory config)
 	// &&: Chain commands - each must succeed for next to run
-	"postCreateCommand": "mkdir -p /vscode ~/.claude && npm install -g @anthropic-ai/claude-code && if [ -f /workspace/.devcontainer/generate-claude-config.sh ]; then /workspace/.devcontainer/generate-claude-config.sh; fi && echo 'DevContainer created successfully! Claude Code installed.' && git --version",
+	"postCreateCommand": "mkdir -p /vscode ~/.claude && npm install -g @anthropic-ai/claude-code && if [ -f /workspace/.devcontainer/generate-claude-config.sh ]; then /workspace/.devcontainer/generate-claude-config.sh; fi && if [ -f /workspace/.devcontainer/link-host-claude.sh ]; then /workspace/.devcontainer/link-host-claude.sh; fi && echo 'DevContainer created successfully! Claude Code installed.' && git --version",
 
 	// Forward Ports: Automatically forward ports from container to host
 	// Purpose: Makes services running in container accessible from host browser/tools
@@ -310,12 +330,38 @@
 	// Format: Object mapping variable names to values
 	// Why useful: Provide consistent configuration without modifying shell profiles
 	// Initialize Command: Runs on HOST before container is created
-	// Purpose: Capture environment variables from host system for container authentication
-	// When executed: Before container build/start, runs on your Mac/host OS
-	// How it works: Writes ANTHROPIC_* environment variables to files for container to read
-	// Security: Files are gitignored, only exist locally, deleted on container rebuild
-	// Required: ANTHROPIC_AUTH_TOKEN must be set in host environment
-	"initializeCommand": "[ -n \"$ANTHROPIC_AUTH_TOKEN\" ] && printf '%s' \"$ANTHROPIC_AUTH_TOKEN\" > ${localWorkspaceFolder}/.devcontainer/.claude-auth-token; [ -n \"$ANTHROPIC_BASE_URL\" ] && printf '%s' \"$ANTHROPIC_BASE_URL\" > ${localWorkspaceFolder}/.devcontainer/.claude-base-url; [ -n \"$ANTHROPIC_CUSTOM_HEADERS\" ] && printf '%s' \"$ANTHROPIC_CUSTOM_HEADERS\" > ${localWorkspaceFolder}/.devcontainer/.claude-custom-headers; rm -f ${localWorkspaceFolder}/.devcontainer/.gh-auth-token; if command -v gh >/dev/null 2>&1; then if gh auth status >/dev/null 2>&1; then gh auth token > ${localWorkspaceFolder}/.devcontainer/.gh-auth-token && echo 'GitHub CLI authenticated on host, token captured for container'; else echo 'GitHub CLI installed on host but not logged in, skipping GitHub auth injection'; fi; else echo 'GitHub CLI (gh) not installed on host, skipping GitHub auth injection'; fi; echo 'Host config extraction complete'",
+	// Purpose: Defensive host-side prep before the container starts:
+	//          1. Ensure ${localEnv:HOME}/.claude exists so the readonly bind mount
+	//             in `mounts` (target: /home/vscode/.claude-host) doesn't fail on a
+	//             fresh host that has never run Claude Code.
+	//          2. Bridge GitHub CLI auth (optional): if `gh` is installed and
+	//             logged in on the host, capture its token into a gitignored file
+	//             the container reads from postCreate.
+	// Note: ANTHROPIC_AUTH_TOKEN / BASE_URL / CUSTOM_HEADERS are now injected
+	//       directly via `containerEnv` below using ${localEnv:VAR} references —
+	//       no host-side file handoff needed for those.
+	"initializeCommand": "mkdir -p \"${localEnv:HOME}/.claude\"; rm -f ${localWorkspaceFolder}/.devcontainer/.gh-auth-token; if command -v gh >/dev/null 2>&1; then if gh auth status >/dev/null 2>&1; then gh auth token > ${localWorkspaceFolder}/.devcontainer/.gh-auth-token && echo 'GitHub CLI authenticated on host, token captured for container'; else echo 'GitHub CLI installed on host but not logged in, skipping GitHub auth injection'; fi; else echo 'GitHub CLI (gh) not installed on host, skipping GitHub auth injection'; fi; echo 'Host config extraction complete'",
+
+	// Container Environment Variables: Injected at container creation, visible
+	// to every process inside the container (shells, Claude Code, anything spawned
+	// via `podman exec`).
+	// Purpose: Pass Anthropic auth credentials from the host shell environment
+	//          into the container without any file-based handoff. The devcontainer
+	//          CLI resolves ${localEnv:VAR} from the host's environment at creation
+	//          time and bakes the value into the container's process env.
+	// Why containerEnv (not remoteEnv): remoteEnv only applies to IDE-spawned
+	//          processes; containerEnv applies to ALL processes so `claude` works
+	//          from any shell — including direct `podman exec`.
+	// Required on host: ANTHROPIC_AUTH_TOKEN. If unset on host, ${localEnv:VAR}
+	//          resolves to empty string and generate-claude-config.sh aborts the
+	//          provisioning step with the same error message as before.
+	// Optional on host: ANTHROPIC_BASE_URL, ANTHROPIC_CUSTOM_HEADERS. Empty values
+	//          are treated as unset by Claude Code (truthy-check on the SDK side).
+	"containerEnv": {
+		"ANTHROPIC_AUTH_TOKEN": "${localEnv:ANTHROPIC_AUTH_TOKEN}",
+		"ANTHROPIC_BASE_URL": "${localEnv:ANTHROPIC_BASE_URL}",
+		"ANTHROPIC_CUSTOM_HEADERS": "${localEnv:ANTHROPIC_CUSTOM_HEADERS}"
+	},
 
 	"remoteEnv": {
 		// WORKSPACE_DIR: Path to workspace directory
